@@ -23,10 +23,15 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
     })
     Object.assign(answers, result.answers)
   }
-  const cutoffs = resolveCutoffs()
-  const decisions = decideItems({ items: input.items, answers, cutoffs })
+  const cutoffs = resolveCutoffs({})
+  const decisions = decideItems({
+    items: input.items,
+    calls: requests.map((request) => request.itemKeys),
+    answers,
+    cutoffs,
+  })
   return renderCompact({
-    header: { source: options.findings, cutoffs: describeCutoffs(cutoffs) },
+    header: { source: options.findings, cutoffs: describeCutoffs(cutoffs, []).line },
     decisions,
     help: [],
   })
