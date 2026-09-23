@@ -1,4 +1,5 @@
 import type { JevRequest } from '../core/state.js'
+import { cacheKey } from '../infra/cache.js'
 import type { FetchLike, JevProvider, JevResult } from './provider.js'
 import type { Answer } from './schema.js'
 
@@ -6,6 +7,7 @@ export interface CallOutcome {
   request: JevRequest
   result: JevResult
   cached: boolean
+  cacheKey: string
 }
 
 export interface RunOutcome {
@@ -33,7 +35,12 @@ export async function runRequests(options: RunRequestsOptions): Promise<RunOutco
       sleep: options.sleep,
       random: options.random,
     })
-    calls.push({ request, result, cached: false })
+    const key = cacheKey({
+      provider: options.provider.name,
+      endpoint: options.provider.endpoint,
+      body: options.provider.buildBody(request),
+    })
+    calls.push({ request, result, cached: false, cacheKey: key })
     Object.assign(answers, result.answers)
   }
   return { calls, answers }

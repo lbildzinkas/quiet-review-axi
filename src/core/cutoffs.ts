@@ -34,6 +34,8 @@ export interface ResolvedCutoffs {
 
 export interface CutoffDescription {
   line: string
+  // The same, in words, for --human output.
+  sentence: string
   isStale: boolean
   warnings: string[]
   help: string[]
@@ -113,8 +115,12 @@ export function describeCutoffs(cutoffs: ResolvedCutoffs, snapshots: string[]): 
     warnings.push(
       `collapse cut-off ${formatCutoff(cutoffs.collapseBelow)} is above the ${formatCutoff(cutoffs.testedCollapseBelow)} the last replay tested, so more real issues than the replay measured may be collapsed`,
     )
+  const isBuiltIn = cutoffs.collapseSource === 'built-in' && cutoffs.keepSource === 'built-in'
   return {
     line: `collapse<${formatCutoff(cutoffs.collapseBelow)} keep>=${formatCutoff(cutoffs.keepAt)} (${provenance})`,
+    sentence: isBuiltIn
+      ? 'built-in, not yet calibrated'
+      : `collapse below ${formatCutoff(cutoffs.collapseBelow)}, keep at ${formatCutoff(cutoffs.keepAt)} (${provenance})`,
     isStale,
     warnings,
     help,

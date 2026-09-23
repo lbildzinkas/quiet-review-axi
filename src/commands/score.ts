@@ -12,9 +12,10 @@ import {
   normalizeComments,
   parsePullRequestRef,
 } from '../inputs/pull-request.js'
+import { QUESTION_PACK_VERSION } from '../core/questions.js'
 import { PROVIDERS } from '../jev/providers.js'
 import { runRequests } from '../jev/run-requests.js'
-import { renderScore } from '../output/render.js'
+import { renderScore, roundCost } from '../output/render.js'
 import { parseScoreArgs, type ScoreOptions } from './score-args.js'
 
 interface ScoreInput {
@@ -61,6 +62,11 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
   })
   const snapshots = [...new Set(run.calls.map((call) => call.result.snapshot))]
   const cutoffDescription = describeCutoffs(cutoffs, snapshots)
+  const costUsd = run.calls.reduce(
+    (total, call) => total + (call.cached ? 0 : call.result.costUsd),
+    0,
+  )
+  const isCached = run.calls.length > 0 && run.calls.every((call) => call.cached)
   return renderScore({
     mode: options.output,
     showAll: options.all,
@@ -75,9 +81,26 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
     provider: provider.name,
     snapshots,
     calls: run.calls.length,
-    costUsd: run.calls.reduce((total, call) => total + (call.cached ? 0 : call.result.costUsd), 0),
-    isCached: run.calls.length > 0 && run.calls.every((call) => call.cached),
+    costUsd,
+    isCached,
     decisions,
+    answers: run.answers,
+    run: {
+      provider: provider.name,
+      model_requested: provider.model,
+      model_returned: snapshots,
+      request_ids: run.calls.map((call) => call.result.responseId ?? null),
+      cache_keys: run.calls.map((call) => call.cacheKey),
+      cached: isCached,
+      question_pack: QUESTION_PACK_VERSION,
+      questions: requests.reduce(
+        (total, request) => total + Object.keys(request.questions).length,
+        0,
+      ),
+      input_tokens: run.calls.reduce((total, call) => total + call.result.inputTokens, 0),
+      cost_usd: roundCost(costUsd),
+      retries: run.calls.reduce((total, call) => total + call.result.retries, 0),
+    },
   })
 }
 
