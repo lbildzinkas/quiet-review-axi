@@ -200,6 +200,19 @@ describe('score <pr-url>', () => {
     expect(result.stdout).toMatch(/unsure\[3\][^\n]*\n {2}c3,[^\n]*\n {2}c5,[^\n]*\n {2}c4,/)
   })
 
+  it('treats a Jev reply naming a non-offered dup key as none, so the item is not lost', async () => {
+    const net = network({
+      items: { ...JEV_ITEMS, c3: { act: 0.55, cat: 'performance', sev: 2.1, dup: 'c3' } },
+    })
+
+    const result = await runCli(['score', PR_URL, '--all'], { fetch: net.fetch, env: SECRETS })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain(
+      '  c3,unsure,0.55,performance,2.1,none,"coderabbitai[bot]",src/queue.ts,17,Consider batching these inserts.',
+    )
+  })
+
   it('prints whole comment bodies with --full', async () => {
     const result = await score([PR_URL, '--full'])
 

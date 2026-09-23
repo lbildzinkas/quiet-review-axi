@@ -119,6 +119,36 @@ describe('verdicts', () => {
       expect(decideDuplicate({ type: 'choice', choice: 'c1' })).toBeNull()
     })
 
+    it('treats a dup choice naming anything but an earlier item of the same call as none', () => {
+      const decide = (dup: Answer, calls: string[][]) =>
+        decideItems({
+          items: [item(1), item(2), item(3)],
+          calls,
+          answers: {
+            ...answers(1, 0.9),
+            ...answers(2, 0.9, { c2_dup: dup }),
+            ...answers(3, 0.9),
+          },
+          cutoffs: BUILT_IN,
+        })[1]?.dupOf
+
+      expect(
+        decide({ type: 'choice', choice: 'c3', probabilities: { c3: 1 } }, [['c1', 'c2', 'c3']]),
+      ).toBeNull()
+      expect(
+        decide({ type: 'choice', choice: 'c2', probabilities: { c2: 1 } }, [['c1', 'c2', 'c3']]),
+      ).toBeNull()
+      expect(
+        decide({ type: 'choice', choice: 'c1', probabilities: { c1: 1 } }, [['c1'], ['c2'], ['c3']]),
+      ).toBeNull()
+      expect(
+        decide(
+          { type: 'choice', choice: 'c1', probabilities: { c1: 0.9, none: 0.1 } },
+          [['c1', 'c2', 'c3']],
+        ),
+      ).toBe('c1')
+    })
+
     it('matches identical text across requests after lower-casing and collapsing whitespace', () => {
       const decisions = decideItems({
         items: [

@@ -148,8 +148,19 @@ function renderCompact(view: ScoreView): string {
 
 // Moves each duplicate directly after the row it duplicates, when that row is in the list.
 function groupDuplicates(rows: Decision[]): Decision[] {
-  const ids = new Set(rows.map((decision) => decision.item.id))
-  const isRoot = (decision: Decision) => decision.dupOf === null || !ids.has(decision.dupOf)
+  const byId = new Map(rows.map((decision) => [decision.item.id, decision]))
+  const isRoot = (decision: Decision) => {
+    const seen = new Set([decision.item.id])
+    let current: Decision | undefined = decision
+    while (current !== undefined && current.dupOf !== null) {
+      const parent = byId.get(current.dupOf)
+      if (parent === undefined) return current === decision
+      if (seen.has(parent.item.id)) return true
+      seen.add(parent.item.id)
+      current = parent
+    }
+    return current === decision
+  }
   const ordered: Decision[] = []
   const visit = (decision: Decision) => {
     ordered.push(decision)

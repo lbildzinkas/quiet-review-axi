@@ -29,13 +29,18 @@ export function decideItems(input: {
 }): Decision[] {
   const { items, answers, cutoffs } = input
   const callOf = new Map(input.calls.flatMap((keys, index) => keys.map((key) => [key, index])))
+  const earlierOf = new Map(
+    input.calls.flatMap((keys) =>
+      keys.map((key, index) => [key, new Set(keys.slice(0, index))] as const),
+    ),
+  )
   const idOf = new Map(items.map((item) => [item.key, item.id]))
   return items.map((item, index) => {
     const worth = noulValue(answers[`${item.key}_act`])
     const category = choiceOf(answers[`${item.key}_cat`])
     const sev = answers[`${item.key}_sev`]
     const dupKey =
-      duplicateWithinCall(answers[`${item.key}_dup`]) ??
+      duplicateWithinCall(answers[`${item.key}_dup`], earlierOf.get(item.key)) ??
       duplicateAcrossCalls(items.slice(0, index), item, callOf)
     return {
       item,
@@ -69,8 +74,13 @@ function topProbability(answer: ChoiceAnswer): number {
   return answer.probabilities?.[answer.choice] ?? 0
 }
 
-function duplicateWithinCall(answer: Answer | undefined): string | null {
+// The top option must name an earlier item of the same call (spec 5.4.4, 6.4).
+function duplicateWithinCall(
+  answer: Answer | undefined,
+  candidates: Set<string> | undefined,
+): string | null {
   if (answer?.type !== 'choice' || answer.choice === 'none') return null
+  if (candidates?.has(answer.choice) !== true) return null
   return topProbability(answer) >= CHOICE_FLOOR ? answer.choice : null
 }
 
