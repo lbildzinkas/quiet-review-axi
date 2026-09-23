@@ -7,7 +7,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Question wording lives only in `src/core/question-pack.json` (spec 5.4.5). A wording change is a new pack version gated by the replay, not by unit tests.
 - Jev API shapes, limits and design patterns: [docs/jev-guide.md](docs/jev-guide.md). Cite it rather than restating vendor facts.
 - The replay's pass rule and labelling rules (spec section 10) are pre-registered: do not change them after a replay's `score` stage has run; use a new replay name instead.
-- Hard rules: v0 never writes to GitHub; request building is deterministic (same data, byte-identical request); API keys and GitHub tokens are never printed, logged, or cached; tests make no live network calls (recorded fixtures only).
+- Hard rules: v0 never writes to GitHub; request building is deterministic (same data, byte-identical request); API keys and GitHub tokens are never printed, logged, or cached; tests make no live network calls (fixtures and scripted fakes only).
 - Replay working data (`.quiet-review/`) holds third-party comment text and must stay out of git; commit only replay configs and aggregate result summaries under `replay/`.
 - Public repository: keep private details, personal data and local machine paths out of every file.
 
