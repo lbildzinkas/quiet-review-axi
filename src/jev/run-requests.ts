@@ -44,13 +44,14 @@ export interface RunRequestsOptions {
 const MAX_LOGGED_BODY_CHARACTERS = 500
 
 // Runs the Jev requests of one CLI run in order: cache first, then paid calls within the
-// budget (spec 9.2, 9.4). Every attempt, cache hits included, is logged (spec 9.3).
+// budget (spec 9.2, 9.4). After a budget stop, remaining cache hits are still served. Every attempt, cache hits included, is logged (spec 9.3).
 export async function runRequests(options: RunRequestsOptions): Promise<RunOutcome> {
   const { provider } = options
   const budget = createBudget(options.maxCostUsd)
   const calls: CallOutcome[] = []
   const answers: Record<string, Answer> = {}
-  for (const [index, request] of options.requests.entries()) {
+  const skipped: JevRequest[] = []
+  for (const request of options.requests) {
     const key = cacheKey({
       provider: provider.name,
       endpoint: provider.endpoint,
@@ -79,8 +80,11 @@ export async function runRequests(options: RunRequestsOptions): Promise<RunOutco
       })
       continue
     }
-    if (!budget.canAfford(estimateRequestTokens(request)))
-      return { calls, answers, skipped: options.requests.slice(index) }
+    // Once one paid call is over budget, no later paid call is made; cache hits still are.
+    if (skipped.length > 0 || !budget.canAfford(estimateRequestTokens(request))) {
+      skipped.push(request)
+      continue
+    }
     const started = performance.now()
     let result: JevResult
     try {
@@ -113,7 +117,7 @@ export async function runRequests(options: RunRequestsOptions): Promise<RunOutco
       latency_ms: latencyMs,
     })
   }
-  return { calls, answers, skipped: [] }
+  return { calls, answers, skipped }
 }
 
 async function readCached(

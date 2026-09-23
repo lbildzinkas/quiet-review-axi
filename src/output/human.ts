@@ -32,6 +32,11 @@ export function renderHuman(view: ScoreView): string {
     `Cut-offs: ${view.cutoffs.sentence}. Scored by ${view.snapshots.join(', ')} in ${view.calls} ${view.calls === 1 ? 'call' : 'calls'} (${costText(view)}).`,
     ...[...view.source.warnings, ...view.cutoffs.warnings].map((warning) => `Warning: ${warning}`),
     ...(view.notice === null ? [] : [`Notice: ${view.notice}.`]),
+    ...(view.stop === null
+      ? []
+      : [
+          `Stopped at --max-cost: ${view.unscored.length} ${view.unscored.length === 1 ? 'item' : 'items'} not scored. Run again with a higher --max-cost to resume; paid results are cached.`,
+        ]),
   ]
   if (keep.length > 0) {
     lines.push('', 'KEEP')

@@ -233,6 +233,38 @@ describe('budget (--max-cost)', () => {
   })
 })
 
+describe('budget stop with a partly cached run', () => {
+  it('still serves later cached requests after a stop, and says so in --human output', async () => {
+    const sandbox = createSandbox()
+    const file = bigFindings(sandbox)
+    await runCli(['score', '--findings', file], { sandbox, env: KEY, fetch: network().fetch })
+    const document = JSON.parse(readFileSync(file, 'utf8'))
+    document.findings[0].body = 'Changed finding 1: '.padEnd(1900, 'y')
+    sandbox.write('work/big.json', JSON.stringify(document))
+    const net = network()
+
+    const json = await runCli(['score', '--findings', file, '--max-cost', '0', '--json'], {
+      sandbox,
+      env: KEY,
+      fetch: net.fetch,
+    })
+    const human = await runCli(['score', '--findings', file, '--max-cost', '0', '--human'], {
+      sandbox,
+      env: KEY,
+      fetch: net.fetch,
+    })
+
+    const result = JSON.parse(json.stdout)
+    expect(json.exitCode).toBe(3)
+    expect(net.jev.calls).toEqual([])
+    expect(result.calls).toBeGreaterThan(0)
+    expect(result.unscored).toContain('f-1')
+    expect(result.items.length).toBeGreaterThan(0)
+    expect(human.exitCode).toBe(3)
+    expect(human.stdout).toMatch(/Stopped at --max-cost: \d+ items? not scored\./)
+  })
+})
+
 describe('--dry-run', () => {
   it('builds and estimates the requests without calling Jev or needing a key', async () => {
     const net = network()
