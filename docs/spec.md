@@ -205,7 +205,7 @@ github_token: set (gh auth token)
 cutoffs: "collapse<0.30 keep>=0.70 (built-in, uncalibrated)"
 cache: 412 entries
 spent_today_usd: 0.0031
-last_replay: public-v1 fail auroc=0.71
+last_replay: public-v0 fail auroc=0.71
 help[3]:
   Run `quiet-review-axi score <pr-url>` to score a pull request's review comments
   Run `quiet-review-axi score --findings <file>` to score a findings file
@@ -406,7 +406,7 @@ real_hidden_ci95: 0.015-0.084
 keep_precision: 0.83
 keep_precision_ci95: 0.74-0.90
 pass_rule: "auroc >= 0.75 and exists t: noise_collapsed >= 0.40 and real_hidden <= 0.05 (judged on measured values)"
-label_check: "60 sampled, AI agreement 0.87 (kappa 0.73), 8 reviewed, 5 automatic labels corrected"
+label_check: "60 sampled, AI agreement 0.87 (kappa 0.73), 8 reviewed, 1 automatic label corrected"
 cutoffs_written: "collapse<0.27 keep>=0.70 -> ~/.config/quiet-review-axi/config.json"
 by_bot[4]{bot,items,real,auroc}:
   coderabbitai[bot],74,28,0.79
