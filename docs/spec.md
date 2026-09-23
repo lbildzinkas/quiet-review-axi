@@ -893,9 +893,29 @@ Each milestone is one or more pull requests, each through the full no-mistakes r
 | M4 | Scoring core and `score`/`evaluate` stages; `report` | Replay config committed first; live Jev run within budget; `report` shows the pass rule outcome |
 | **Gate** | **Go / no-go on the pass rule (9.8)** | Maintainer decision recorded in `replay/<name>.result.md` |
 | M5 | `score <pr-url>` and `score --findings` polished on the shared core, readable mode, threshold from the replay | Behavioural tests pass; manual run on a live PR |
-| M6 | npm publish; plan v1 (GitHub App that collapses comments, raw-diff risk routing, per-repo calibration) | Only after the gate passes |
+| M6 | Hardening: rounds of real use on live PRs and findings files, testing and fixes | Known bugs from real use are fixed; no open behaviour change pending in this spec |
+| M7 | User and agent documentation (11.1) | Docs merged, and every example in them was run against the released CLI |
+| M8 | npm publish; plan v1 (GitHub App that collapses comments, raw-diff risk routing, per-repo calibration) | Only after the gate passes and M7 is merged |
 
-The scoring core (M4) is shared by `replay` and `score`, so M5 is thin. If the gate fails and the one rework also fails, M5 and M6 are dropped.
+The scoring core (M4) is shared by `replay` and `score`, so M5 is thin. If the gate fails and the one rework also fails, M5-M8 are dropped.
+
+### 11.1 Documentation milestone (M7)
+
+M7 comes after implementation and the M6 rounds of testing and fixes, so the docs describe the tool as it really behaves.
+It delivers detailed Markdown documentation under `docs/usage/` that teaches both people and coding agents how to use the tool. `README.md` links to it.
+
+| Page | Covers |
+|---|---|
+| `install.md` | Requirements (Node, `gh` login), installing from the repository, upgrading, verifying the install |
+| `keys-and-providers.md` | OpenRouter and TypeSafe keys, environment variables and the config file (with permissions), `--provider`, the pinned model and snapshots, privacy settings, cost and `--max-cost` |
+| `commands.md` | Every command and flag (`score <pr-url>`, `score --findings`, `replay` and its stages, `report`, home, `update`), each with real example invocations and outputs |
+| `output-formats.md` | Compact TOON, `--json` (field reference) and `--human`, exit codes and error codes, `help` hints |
+| `verdicts-and-thresholds.md` | What `keep`, `unsure` and `collapse` mean, the worth-acting-on probability, category, severity and duplicate fields, how to choose thresholds, and why a probability is not a percentage |
+| `replay.md` | The replay experiment for readers who want to reproduce or extend it: config, selection, sampling, labelling, the label check and review file, metrics, the pass rule, and reading `report` |
+| `troubleshooting.md` | Key, credit, rate-limit and provider errors; budget stops and resuming; cache behaviour; snapshot-change warnings; GitHub access problems |
+| `agents.md` | An agent-oriented usage guide: when to call the tool, the recommended call sequence, parsing `--json` and TOON, acting on exit codes, respecting budgets, and a short copy-ready snippet for an agent's instructions file |
+
+Every example in these pages is produced by running the CLI, not written by hand. Fixture-backed examples are checked by a test so the docs cannot drift from the output.
 
 ---
 
@@ -928,5 +948,5 @@ Items marked **proposed** in this spec, plus facts that need a live check. Each 
 | 9 | Exact no-mistakes findings format: are the aliases in 4.5 enough, or is a dedicated adapter needed? | Aliases only | M5 |
 | 10 | Duplicate question: is the relative Choice with a 0.60 floor enough, or should an absolute "is this a duplicate of any earlier comment" Noul be added (pointer + existence pattern, [jev-guide.md](jev-guide.md) 3.1, pattern 5)? | Choice only, since duplicates do not drive the verdict | M4 |
 | 11 | Rework retest on a fresh sample when ≥150 unused items remain, otherwise on the same data. Acceptable? | As stated in 9.8 | Gate |
-| 12 | For v1: can a GitHub App installation minimize comments written by another app (GraphQL `minimizeComment`)? | Unverified; blocks the v1 App design, not v0 | M6 |
+| 12 | For v1: can a GitHub App installation minimize comments written by another app (GraphQL `minimizeComment`)? | Unverified; blocks the v1 App design, not v0 | M8 |
 | 13 | Should the PR body be added to the state? It might help or add context rot. | Excluded in v0; test after the replay | After gate |
