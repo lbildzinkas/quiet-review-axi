@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { encode } from '@toon-format/toon'
 import type { AppContext } from '../context.js'
 import { describeCutoffs, resolveCutoffs } from '../core/cutoffs.js'
 import type { Item } from '../core/items.js'
@@ -27,7 +28,7 @@ import {
 import type { JevProvider } from '../jev/provider.js'
 import { PROVIDERS } from '../jev/providers.js'
 import { runRequests } from '../jev/run-requests.js'
-import { renderDryRun, renderScore, roundCost } from '../output/render.js'
+import { joinBlocks, renderDryRun, renderHelp, renderScore, roundCost } from '../output/render.js'
 import { assertPrivateAllowed, dryRunNotice, sentNotice } from './privacy.js'
 import { parseScoreArgs, type ScoreOptions } from './score-args.js'
 
@@ -232,3 +233,36 @@ async function findingsInput(options: ScoreOptions, context: AppContext): Promis
     warnings: findings.warnings,
   }
 }
+
+export const SCORE_HELP = joinBlocks(
+  encode({
+    command: 'score',
+    usage: 'quiet-review-axi score <pr-url> | score --findings <file|-> [flags]',
+    description:
+      "Scores a pull request's inline review comments, or a findings file, with Jev and prints keep, unsure and collapse verdicts",
+    flags: {
+      '--findings <file|->': 'Score a findings JSON file, or stdin with -',
+      '--repo-root <dir>':
+        'Where to read code for findings without a hunk (default: current directory)',
+      '--all': 'Show every item with its text, including collapsed ones',
+      '--full': 'Do not truncate comment text',
+      '--authors <bots|humans|all>': 'Which comment authors to score (default: all)',
+      '--collapse-below <p>': 'Collapse cut-off for this run',
+      '--keep-at <p>': 'Keep cut-off for this run',
+      '--allow-private': 'Score this run even when the repository is private',
+      '--provider <openrouter|typesafe>': 'Jev backend (default: openrouter, or the user config)',
+      '--max-cost <usd>':
+        'Stop before a paid call would pass this run total (default: 0.50; 0 = cache only)',
+      '--no-cache': 'Skip cache reads and make fresh calls',
+      '--dry-run': 'Build and estimate the requests without calling anything',
+      '--json': 'Emit one JSON document',
+      '--human': 'Emit a readable summary for people',
+    },
+    exit_codes:
+      '0 ok, 1 unexpected, 2 validation, 3 budget stop, 4 key, provider or GitHub problem',
+  }),
+  renderHelp([
+    'Run `quiet-review-axi score acme/widgets#412` to score a pull request',
+    'Run `quiet-review-axi score --findings findings.json --dry-run` to see what would be sent',
+  ]),
+)
