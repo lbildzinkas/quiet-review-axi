@@ -2,10 +2,10 @@
 
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
-- Status: specification only; no source code yet. [docs/spec.md](docs/spec.md) is the v0 contract (requirements R1-R16, CLI, Jev questions, verdict rules, replay experiment, module layout, milestones). Read it before any change, and update it in the same change when behaviour diverges.
+- Status: specification only; no source code yet. [docs/spec.md](docs/spec.md) is the v0 contract (requirements R1-R17 and design decisions D1-D12, CLI, Jev questions, verdict rules, replay experiment, module layout, milestones). Read it before any change, and update it in the same change when behaviour diverges.
 - Jev API shapes, limits and design patterns: [docs/jev-guide.md](docs/jev-guide.md). Cite it rather than restating vendor facts.
-- The replay's pass rule and labelling rules (spec section 9) are pre-registered: do not change them after a replay's `score` stage has run; use a new replay name instead.
-- Hard rules: v0 never writes to GitHub; API keys are never printed, logged, or cached; tests make no live network calls (recorded fixtures only).
+- The replay's pass rule and labelling rules (spec section 10) are pre-registered: do not change them after a replay's `score` stage has run; use a new replay name instead.
+- Hard rules: v0 never writes to GitHub; request building is deterministic (same data, byte-identical request); API keys and GitHub tokens are never printed, logged, or cached; tests make no live network calls (recorded fixtures only).
 - Replay working data (`.quiet-review/`) holds third-party comment text and must stay out of git; commit only replay configs and aggregate result summaries under `replay/`.
 - Public repository: keep private details, personal data and local machine paths out of every file.
 
