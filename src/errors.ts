@@ -22,12 +22,22 @@ export const EXIT_CODES = {
 
 export type ErrorCode = keyof typeof EXIT_CODES
 
+export interface ErrorDetails {
+  // Provider HTTP status and response body, kept for the call log (redacted there).
+  providerStatus?: number
+  providerBody?: string
+}
+
 export class QuietReviewError extends AxiError {
   declare readonly code: ErrorCode
+  readonly providerStatus?: number
+  readonly providerBody?: string
 
-  constructor(code: ErrorCode, message: string, help: string[] = []) {
+  constructor(code: ErrorCode, message: string, help: string[] = [], details: ErrorDetails = {}) {
     super(message, code, help)
     this.name = 'QuietReviewError'
+    this.providerStatus = details.providerStatus
+    this.providerBody = details.providerBody
   }
 }
 
