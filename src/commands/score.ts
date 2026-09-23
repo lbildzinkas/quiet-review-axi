@@ -40,6 +40,7 @@ export interface ScoreInput {
   command: string
   header: RequestHeader
   items: Item[]
+  warnings: string[]
 }
 
 export async function scoreCommand(args: string[], context: AppContext): Promise<string> {
@@ -163,6 +164,7 @@ function sourceView(input: ScoreInput) {
     label: input.label,
     title: input.header.title ?? null,
     command: input.command,
+    warnings: input.warnings,
   }
 }
 
@@ -208,18 +210,25 @@ async function pullRequestInput(
     command: `score ${label}`,
     header: { repository: `${ref.owner}/${ref.repo}`, title: pull.title },
     items: normalizeComments(pull.comments, options.authors),
+    warnings: [],
   }
 }
 
 async function findingsInput(options: ScoreOptions, context: AppContext): Promise<ScoreInput> {
   const file = options.findings ?? ''
-  const findings = await loadFindings({ file, cwd: context.cwd })
+  const findings = await loadFindings({
+    file,
+    cwd: context.cwd,
+    repoRoot: options.repoRoot,
+    readStdin: context.readStdin,
+  })
   return {
     kind: 'findings',
     needsNotice: true,
-    label: file,
+    label: file === '-' ? 'stdin' : file,
     command: `score --findings ${file}`,
     header: findings.title === undefined ? {} : { title: findings.title },
     items: findings.items,
+    warnings: findings.warnings,
   }
 }

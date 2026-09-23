@@ -30,7 +30,7 @@ export function renderHuman(view: ScoreView): string {
     [view.source.label, view.source.title].filter(Boolean).join('  '),
     `${view.decisions.length} ${view.source.kind === 'pr' ? 'review comments' : 'findings'}: ${keep.length + folded(view, 'keep', isFolded)} worth acting on, ${unsure.length + folded(view, 'unsure', isFolded)} unsure, ${collapsed.length} collapsed`,
     `Cut-offs: ${view.cutoffs.sentence}. Scored by ${view.snapshots.join(', ')} in ${view.calls} ${view.calls === 1 ? 'call' : 'calls'} (${costText(view)}).`,
-    ...view.cutoffs.warnings.map((warning) => `Warning: ${warning}`),
+    ...[...view.source.warnings, ...view.cutoffs.warnings].map((warning) => `Warning: ${warning}`),
     ...(view.notice === null ? [] : [`Notice: ${view.notice}.`]),
   ]
   if (keep.length > 0) {

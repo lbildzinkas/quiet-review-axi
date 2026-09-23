@@ -10,7 +10,14 @@ export interface ScoreView {
   mode: OutputMode
   showAll: boolean
   showFull: boolean
-  source: { kind: 'pr' | 'findings'; label: string; title: string | null; command: string }
+  source: {
+    kind: 'pr' | 'findings'
+    label: string
+    title: string | null
+    command: string
+    // Input warnings, such as ignored unknown fields in a findings file.
+    warnings: string[]
+  }
   cutoffs: CutoffDescription
   provider: string
   snapshots: string[]
@@ -76,7 +83,11 @@ function headerFields(view: ScoreView): Record<string, unknown> {
   if (view.notice !== null) header.notice = view.notice
   if (view.stop)
     Object.assign(header, { stopped: 'max-cost', code: 'BUDGET_STOP', unscored: view.unscored })
-  if (view.cutoffs.warnings.length > 0) header.warnings = view.cutoffs.warnings
+  const warnings = [...view.source.warnings, ...view.cutoffs.warnings]
+  if (warnings.length > 0) header.warnings = warnings
+  const withoutCode = view.decisions.filter((decision) => decision.item.context === 'none')
+  if (withoutCode.length > 0)
+    header.no_code_context = withoutCode.map((decision) => decision.item.id)
   return header
 }
 
