@@ -105,15 +105,36 @@ function jsonItem(decision: Decision, answers: Record<string, Answer>) {
   }
 }
 
+// Actionable first (spec 4.4, D2): keep and unsure rows with text, collapsed items as ids.
+// --all prints one table of every item, each duplicate directly after the row it repeats.
 function renderCompact(view: ScoreView): string {
   const body = headerFields(view)
   const keep = section(view.decisions, 'keep')
   const unsure = section(view.decisions, 'unsure')
   const collapse = view.decisions.filter((decision) => decision.verdict === 'collapse')
-  body.keep = keep.map((decision) => fullRow(decision, view.showFull))
-  body.unsure = unsure.map((decision) => fullRow(decision, view.showFull))
-  body.collapse = collapse.map(idRow)
+  if (view.showAll) {
+    body.items = groupDuplicates([...keep, ...unsure, ...collapse]).map((decision) =>
+      allRow(decision, view.showFull),
+    )
+  } else {
+    body.keep = groupDuplicates(keep).map((decision) => fullRow(decision, view.showFull))
+    body.unsure = groupDuplicates(unsure).map((decision) => fullRow(decision, view.showFull))
+    body.collapse = collapse.map(idRow)
+  }
   return joinBlocks(encode(body), renderHelp(helpLines(view, collapse.length)))
+}
+
+// Moves each duplicate directly after the row it duplicates, when that row is in the list.
+function groupDuplicates(rows: Decision[]): Decision[] {
+  const ids = new Set(rows.map((decision) => decision.item.id))
+  const isRoot = (decision: Decision) => decision.dupOf === null || !ids.has(decision.dupOf)
+  const ordered: Decision[] = []
+  const visit = (decision: Decision) => {
+    ordered.push(decision)
+    for (const child of rows) if (child.dupOf === decision.item.id && !isRoot(child)) visit(child)
+  }
+  for (const decision of rows) if (isRoot(decision)) visit(decision)
+  return ordered
 }
 
 function helpLines(view: ScoreView, collapsed: number): string[] {
@@ -151,6 +172,22 @@ function fullRow(decision: Decision, showFull: boolean) {
     path: decision.item.path,
     line: decision.item.line,
     text: showFull ? decision.item.body : preview(decision.item.body),
+  }
+}
+
+function allRow(decision: Decision, showFull: boolean) {
+  const row = fullRow(decision, showFull)
+  return {
+    id: row.id,
+    verdict: decision.verdict,
+    worth: row.worth,
+    category: row.category,
+    severity: row.severity,
+    dup_of: decision.dupOf ?? 'none',
+    author: row.author,
+    path: row.path,
+    line: row.line,
+    text: row.text,
   }
 }
 

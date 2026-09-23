@@ -80,16 +80,17 @@ export function isBot(user: ReviewComment['user']): boolean {
   return user?.type === 'Bot' || (user?.login ?? '').endsWith('[bot]')
 }
 
-// Thread roots only, in creation order (then comment id), numbered c1, c2, ... (spec 4.4, R17).
+// Thread roots only, in creation order (then comment id), numbered c1, c2, ... before the
+// author filter, so ids stay stable for a given pull request (spec 4.4, R17).
 export function normalizeComments(comments: ReviewComment[], authors: AuthorFilter): Item[] {
   return comments
     .filter((comment) => comment.in_reply_to_id === undefined || comment.in_reply_to_id === null)
-    .filter((comment) => authors === 'all' || isBot(comment.user) === (authors === 'bots'))
     .sort((a, b) => compare(a.created_at, b.created_at) || a.id - b.id)
-    .map((comment, index) => {
+    .map((comment, index) => ({ comment, key: `c${index + 1}` }))
+    .filter(({ comment }) => authors === 'all' || isBot(comment.user) === (authors === 'bots'))
+    .map(({ comment, key }): Item => {
       const line = comment.line ?? comment.original_line
       const start = comment.line === null ? comment.original_start_line : comment.start_line
-      const key = `c${index + 1}`
       return {
         key,
         id: key,
