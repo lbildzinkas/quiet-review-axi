@@ -28,10 +28,13 @@ import type { JevProvider } from '../jev/provider.js'
 import { PROVIDERS } from '../jev/providers.js'
 import { runRequests } from '../jev/run-requests.js'
 import { renderDryRun, renderScore, roundCost } from '../output/render.js'
+import { assertPrivateAllowed, dryRunNotice, sentNotice } from './privacy.js'
 import { parseScoreArgs, type ScoreOptions } from './score-args.js'
 
 export interface ScoreInput {
   kind: 'pr' | 'findings'
+  // Whether the private-data notice applies: private repositories and findings files.
+  needsNotice: boolean
   label: string
   // How to re-run this command in help lines, for example `score acme/widgets#412`.
   command: string
@@ -51,7 +54,7 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
   const provider = PROVIDERS[options.provider ?? userConfig.provider ?? 'openrouter']
   const input =
     options.findings === undefined
-      ? await pullRequestInput(options, context)
+      ? await pullRequestInput(options, context, userConfig, provider)
       : await findingsInput(options, context)
   const requests = buildRequests({ header: input.header, items: input.items })
   const cacheDirectory = cacheDir(context.env)
@@ -72,6 +75,7 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
       source: sourceView(input),
       provider,
       cutoffs: describeCutoffs(cutoffs, []),
+      notice: input.needsNotice ? dryRunNotice(input.kind, provider) : null,
       items: input.items.length,
       requests: requests.map((request, index) => ({
         body: provider.buildBody(request),
@@ -91,6 +95,7 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
     useCache: !options.noCache,
     cacheDir: cacheDirectory,
     callLogPath: callLogPath(context.env),
+    notice: input.needsNotice ? sentNotice(input.kind, provider) : undefined,
     apiKey: () => requireApiKey(provider, context, userConfig),
     fetch: context.fetch,
     sleep: context.sleep,
@@ -126,6 +131,7 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
     isCached,
     decisions,
     answers: run.answers,
+    notice: input.needsNotice && run.calls.length > 0 ? sentNotice(input.kind, provider) : null,
     unscored: isStopped
       ? input.items.filter((item) => !scoredKeys.has(item.key)).map((item) => item.id)
       : [],
@@ -177,14 +183,27 @@ export function secretsOf(context: AppContext, userConfig: UserConfig): (string 
   ]
 }
 
-async function pullRequestInput(options: ScoreOptions, context: AppContext): Promise<ScoreInput> {
+async function pullRequestInput(
+  options: ScoreOptions,
+  context: AppContext,
+  userConfig: UserConfig,
+  provider: JevProvider,
+): Promise<ScoreInput> {
   const ref = parsePullRequestRef(options.target ?? '')
   const token = await requireGitHubToken(context.env, context.runGhAuthToken)
   const client = createGitHubClient({ token: token.token, fetch: context.fetch })
   const pull = await fetchPullRequest(client, ref)
   const label = formatRef(ref)
+  assertPrivateAllowed({
+    repository: `${ref.owner}/${ref.repo}`,
+    isPrivate: pull.isPrivate,
+    allowPrivateFlag: options.allowPrivate,
+    allowList: userConfig.allow_private ?? [],
+    provider,
+  })
   return {
     kind: 'pr',
+    needsNotice: pull.isPrivate,
     label,
     command: `score ${label}`,
     header: { repository: `${ref.owner}/${ref.repo}`, title: pull.title },
@@ -197,6 +216,7 @@ async function findingsInput(options: ScoreOptions, context: AppContext): Promis
   const findings = await loadFindings({ file, cwd: context.cwd })
   return {
     kind: 'findings',
+    needsNotice: true,
     label: file,
     command: `score --findings ${file}`,
     header: findings.title === undefined ? {} : { title: findings.title },

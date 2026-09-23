@@ -19,6 +19,8 @@ export interface ScoreView {
   isCached: boolean
   decisions: Decision[]
   answers: Record<string, Answer>
+  // The private-data notice (spec 8.3), when this run sent or served such data.
+  notice: string | null
   // Ids of items left unscored because the run stopped at --max-cost (spec 9.4).
   unscored: string[]
   stop: { maxCost: number } | null
@@ -71,6 +73,7 @@ function headerFields(view: ScoreView): Record<string, unknown> {
     cost_usd: roundCost(view.costUsd),
     cached: view.isCached,
   })
+  if (view.notice !== null) header.notice = view.notice
   if (view.stop)
     Object.assign(header, { stopped: 'max-cost', code: 'BUDGET_STOP', unscored: view.unscored })
   if (view.cutoffs.warnings.length > 0) header.warnings = view.cutoffs.warnings
@@ -240,6 +243,7 @@ export interface DryRunView {
   source: ScoreView['source']
   provider: { name: string; model: string }
   cutoffs: CutoffDescription
+  notice: string | null
   items: number
   requests: {
     body: Record<string, unknown>
@@ -272,6 +276,7 @@ export function renderDryRun(view: DryRunView): string {
     estimated_input_tokens: estimatedTokens,
     estimated_cost_usd: roundCost(estimateCost(paidTokens)),
   })
+  if (view.notice !== null) header.notice = view.notice
   const help = [`Run \`${BIN} ${view.source.command}\` to send the requests`]
   const rows = view.requests.map((request, index) => ({
     call: index + 1,
