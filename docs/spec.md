@@ -273,7 +273,7 @@ Rules for the output:
 - In `--all` mode, a duplicate row is printed directly after the row it duplicates, whatever its verdict, with its `dup_of` set (D7). In the default mode, a duplicate in `keep` or `unsure` is printed after the earlier row the same way.
 - `id` values (`c1`, `c2`, ...) are stable for a given PR: comments are numbered in creation order.
 - When the cut-offs are stale (6.2), the output adds `warning: calibrated cut-offs were measured on <old snapshot>, this run used <new snapshot>` and a help line suggesting a replay re-run ([jev-guide.md](jev-guide.md) 2.8).
-- A run on a private repository prints a one-line notice of what was sent (comment text, code hunks, PR title), to which provider and model, and that provider's retention posture as worded in 8.3. The same notice is written to the cost log (9.3).
+- A run on a private repository prints the one-line notice of 8.3: what was sent, to which provider and model, and that provider's retention posture. It is printed only when a request was sent or served from cache; under `--dry-run` it names what would be sent and to which provider instead. The notice is written to the cost log (9.3).
 
 `--json` emits one document with:
 
@@ -340,7 +340,7 @@ Scores a generic findings file. `<file>` may be `-` for stdin.
 - **Missing hunk.** When `hunk` is missing but `path` and `line` are present, code reads lines `line-15 .. line+5` of `path` under `--repo-root <dir>` (default: the current directory) and uses them as the hunk. When that is not possible either, the item is scored without code and marked `context: none` in the output.
 - **no-mistakes mapping.** The documentation (12.1) gives the exact field mapping from a no-mistakes findings export to this format, with a ready-to-run conversion command. The CLI itself accepts only this format.
 - **SARIF** input is out of scope for v0.
-- **Private data.** The findings file is the user's explicit choice of what to send, so there is no visibility check and no blocking: every `--findings` run prints the one-line notice of 8.3 (what was sent, to which provider and model, and that provider's retention posture) and writes it to the cost log (9.3).
+- **Private data.** The findings file is the user's explicit choice of what to send, so there is no visibility check and no blocking: a `--findings` run that sends a request, or serves one from cache, prints the one-line notice of 8.3 (what was sent, to which provider and model, and that provider's retention posture) and writes it to the cost log (9.3); under `--dry-run` it names what would be sent and to which provider instead.
 
 Output is the same as 4.4, with `source: <file>` in place of `pr:`.
 
@@ -727,7 +727,7 @@ GitHub access and token handling get their own documentation page (12.1), becaus
 - **Public repository:** score normally.
 - **Private repository, no opt-in:** stop before any Jev call with `PRIVATE_REPO_NOT_ALLOWED` (exit 2). The error's help line names the opt-in (`--allow-private`, or the `allow_private` list in the user config, 9.1) and the provider and model the data would be sent to.
 - **Opt-in:** per run with `--allow-private` (4.4), or standing per repository via the `allow_private` list in the user config. Entries are `owner/repo` strings; `*` allows any private repository and is never the default.
-- **Notice:** every private run prints one line naming what was sent (comment text, code hunks, PR title), the provider and model, and that provider's retention posture: on `openrouter`, that zero-retention routing was requested via provider preferences (5.1); on `typesafe`, that no per-request retention control exists and retention follows TypeSafe terms (12.1). The same notice is written to the cost log (9.3).
+- **Notice:** a private run prints one line naming what was sent (comment text, code hunks, PR title), the provider and model, and that provider's retention posture: on `openrouter`, that zero-retention routing was requested via provider preferences (5.1); on `typesafe`, that no per-request retention control exists and retention follows TypeSafe terms ([jev-guide.md](jev-guide.md) 2.12). The notice is printed only when a request was sent, or served from the cache, in this run; under `--dry-run` the run instead prints what would be sent and to which provider, without claiming anything was sent. The printed notice is written to the cost log (9.3).
 - **`score --findings`:** no visibility check is possible; the file is treated as the user's explicit choice. It prints the same notice and never blocks (4.5).
 
 What is sent, to which provider, each provider's retention terms, and how to opt in or out are documented on the privacy page (12.1).
@@ -1133,7 +1133,7 @@ Every example in these pages is produced by running the CLI, not written by hand
 - **Prompt injection.** Comment text is third-party input and can try to steer answers ([jev-guide.md](jev-guide.md) 3.2). Mitigations: data fields only, a test, and a replay experiment.
 - **Vendor format changes.** Bots change their comment markup. Body cleaning (5.3) is covered by tests with recorded examples per bot.
 - **Single model vendor.** The provider layer (section 7) keeps a later non-Jev backend a one-module change.
-- **Privacy.** Scoring sends comment text and code hunks to the configured provider. Public repositories score normally; private repositories are scored only after an explicit opt-in, and every private run prints and logs what went where (8.3). Each provider's retention terms are documented (12.1); OpenRouter ZDR acceptance for Jev is still unverified (14, question 6).
+- **Privacy.** Scoring sends comment text and code hunks to the configured provider. Public repositories score normally; private repositories are scored only after an explicit opt-in, and every private run that sends data prints and logs what went where (8.3). Each provider's retention terms are documented (12.1); OpenRouter ZDR acceptance for Jev is still unverified (14, question 6).
 
 ---
 
