@@ -8,19 +8,54 @@ Output is compact [AXI](https://github.com/kunchenguid/axi) TOON for coding agen
 
 ## Status
 
-**Specification only. Implementation is pending.**
+**v0 in progress.** Scoring works; the accuracy replay does not exist yet.
 
-v0 starts with an accuracy replay on public pull requests: it checks whether Jev's scores separate comments developers acted on from comments they ignored.
+v0 is decided by an accuracy replay on public pull requests: it checks whether Jev's scores separate comments developers acted on from comments they ignored.
 The project continues only if the replay passes a rule fixed in advance (AUROC ≥ 0.75, and collapsing at least 40% of noise while hiding at most 5% of real issues).
+Until then, the verdict cut-offs are the generic 0.30 / 0.70 band, labelled `uncalibrated` in every output.
 
-Planned v0 commands:
-
-- `quiet-review-axi score <pr-url>`: score a pull request's review comments (read-only on GitHub)
-- `quiet-review-axi score --findings <file>`: score a generic findings file
-- `quiet-review-axi replay`: build the public dataset and run the accuracy test
-- `quiet-review-axi report`: print the accuracy summary
+| Command | State |
+|---|---|
+| `quiet-review-axi score <pr-url>` | Available: scores a pull request's inline review comments (read-only on GitHub) |
+| `quiet-review-axi score --findings <file>` | Available: scores a generic findings file |
+| `quiet-review-axi replay` | Planned: builds the public dataset and runs the accuracy test |
+| `quiet-review-axi report` | Planned: prints the accuracy summary |
 
 Backends: OpenRouter (default) or the TypeSafe API, with your own key.
+
+## Install
+
+Requires Node 20.19 or later. v0 is installed from the repository, not from npm:
+
+```sh
+npm install -g github:lbildzinkas/quiet-review-axi
+```
+
+## Use
+
+```sh
+export OPENROUTER_API_KEY=...        # or TYPESAFE_API_KEY with --provider typesafe
+export GITHUB_TOKEN=...              # or GH_TOKEN, or be logged in with `gh auth login`
+
+quiet-review-axi                                   # current setup: provider, key source, cut-offs, cache, spend
+quiet-review-axi score acme/widgets#412            # compact output for agents
+quiet-review-axi score acme/widgets#412 --human    # readable summary
+quiet-review-axi score acme/widgets#412 --json     # one JSON document with raw answers
+quiet-review-axi score --findings findings.json --dry-run   # show what would be sent, send nothing
+```
+
+Each run is capped by `--max-cost` (default $0.50), and repeated runs are served from a local cache at no cost.
+Private repositories are refused unless you opt in with `--allow-private`.
+Run `quiet-review-axi score --help` for every flag.
+
+## Develop
+
+```sh
+npm install
+npm run check    # lint, format check, typecheck, offline tests
+```
+
+Tests never call Jev or GitHub. See [docs/spec.md](docs/spec.md) section 11.3.
 
 ## Documents
 
