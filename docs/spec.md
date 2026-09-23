@@ -41,7 +41,7 @@ For each comment, Quiet Review asks Jev four typed questions, batched into one r
 Only the worth-acting-on probability drives the verdict: **keep**, **unsure** or **collapse**. The other three answers only label, sort and group the output.
 
 Everything around the model is deterministic code: building the request, the verdict rules, and every string the user reads (R17).
-Jev costs $0.042 per million input tokens with free output ([jev-guide.md](jev-guide.md) 2.11), and TypeSafe says most queries complete in about 100 ms.
+Jev costs $0.042 per million input tokens with free output ([jev-guide.md](jev-guide.md) 2.11).
 A pull request with 20 comments costs a fraction of a cent to score.
 
 ### 1.3 v0 goal
@@ -118,7 +118,7 @@ The same GitHub data (or findings file) and the same options must produce **byte
   - JSON is serialized with a fixed key order;
   - trimming and cleaning rules (5.3) are pure functions;
   - nothing time-dependent, random or machine-specific enters the body.
-- A test (12.3) builds the same request twice from the same fixture, and once more after shuffling the input order, and asserts identical bytes and cache keys.
+- A test (11.3) builds the same request twice from the same fixture, once more after shuffling the input order, and once more against a cache warmed by a previous run's responses, and asserts identical bytes and cache keys every time.
 
 ---
 
@@ -167,7 +167,7 @@ The shape follows the `axi-sdk-js` conventions used by `gh-axi` and `lavish-axi`
 |---|---|
 | 0 | Success. Verdicts never change the exit code in v0: a `score` run that collapses comments, or a replay that fails its pass rule, still exits 0. The result is data, not an error. |
 | 1 | Unexpected error: a bug or an unclassified failure (`UNKNOWN`). |
-| 2 | Usage or validation error (the SDK's `VALIDATION_ERROR` mapping): bad flags, malformed findings file or config file, unparsable PR URL, out-of-range cut-offs. |
+| 2 | Usage or validation error (the SDK's `VALIDATION_ERROR` mapping): bad flags, malformed findings file or config file, unparsable PR URL, out-of-range cut-offs, scoring a private repository without opt-in (8.3). |
 | 3 | Stopped at `--max-cost` (`BUDGET_STOP`). Results obtained before the stop are cached and printed; re-running with a higher limit resumes and pays only for what is missing. |
 | 4 | Key or provider problem, including GitHub: a missing or rejected key or token, unsafe config-file permissions, exhausted credits, rate limits after retries, provider or GitHub errors, an invalid provider response, or a PR that does not exist or is not visible to the token. |
 
@@ -189,6 +189,7 @@ Error codes (the `code:` field) are stable strings:
 | `GITHUB_NOT_FOUND` | 4 | The PR or repository does not exist or is not visible |
 | `GITHUB_RATE_LIMIT` | 4 | GitHub rate limit reached |
 | `GITHUB_ERROR` | 4 | Any other GitHub failure |
+| `PRIVATE_REPO_NOT_ALLOWED` | 2 | A private repository was scored without opt-in (8.3) |
 | `UNKNOWN` | 1 | Unexpected |
 
 ### 4.3 Home (no command)
@@ -226,6 +227,7 @@ Flags (besides the global ones):
 | `--authors <bots\|humans\|all>` | `all` | Which comment authors to score. A bot is a GitHub user with `type: "Bot"` or a login ending in `[bot]`. |
 | `--collapse-below <p>` | from config (6.2) | Collapse cut-off for this run. |
 | `--keep-at <p>` | from config (6.2) | Keep cut-off for this run. |
+| `--allow-private` | off | Score this run even when the repository is private (8.3). |
 
 Accepted URL forms: `https://github.com/<owner>/<repo>/pull/<n>` (with or without a trailing path such as `/files`), and the short form `<owner>/<repo>#<n>`.
 
@@ -271,6 +273,7 @@ Rules for the output:
 - In `--all` mode, a duplicate row is printed directly after the row it duplicates, whatever its verdict, with its `dup_of` set (D7). In the default mode, a duplicate in `keep` or `unsure` is printed after the earlier row the same way.
 - `id` values (`c1`, `c2`, ...) are stable for a given PR: comments are numbered in creation order.
 - When the cut-offs are stale (6.2), the output adds `warning: calibrated cut-offs were measured on <old snapshot>, this run used <new snapshot>` and a help line suggesting a replay re-run ([jev-guide.md](jev-guide.md) 2.8).
+- A run on a private repository prints a one-line notice of what was sent (comment text, code hunks, PR title), to which provider and model, and that zero retention was requested (8.3). The same notice is written to the cost log (9.3).
 
 `--json` emits one document with:
 
@@ -337,6 +340,7 @@ Scores a generic findings file. `<file>` may be `-` for stdin.
 - **Missing hunk.** When `hunk` is missing but `path` and `line` are present, code reads lines `line-15 .. line+5` of `path` under `--repo-root <dir>` (default: the current directory) and uses them as the hunk. When that is not possible either, the item is scored without code and marked `context: none` in the output.
 - **no-mistakes mapping.** The documentation (12.1) gives the exact field mapping from a no-mistakes findings export to this format, with a ready-to-run conversion command. The CLI itself accepts only this format.
 - **SARIF** input is out of scope for v0.
+- **Private data.** The findings file is the user's explicit choice of what to send, so there is no visibility check and no blocking: every `--findings` run prints the one-line notice of 8.3 (what was sent, to which provider and model, zero retention requested) and writes it to the cost log (9.3).
 
 Output is the same as 4.4, with `source: <file>` in place of `pr:`.
 
@@ -438,7 +442,7 @@ The response's `model` field (the dated snapshot, for example `typesafe/jev-1.13
 ### 5.2 Calls per pull request (D6)
 
 - **One call when it fits.** All items of one PR go into one request. Every question points at its item by a backticked path into a shared state, so all questions read the same state ([jev-guide.md](jev-guide.md) 2.6).
-- **Size estimate.** Code estimates the request size as `ceil(characters / 3.5)` tokens. After the first response it corrects the estimate with the observed characters-per-token ratio, stored with the cache so the estimate stays deterministic for a given cache state.
+- **Size estimate.** Code estimates the request size as `ceil(characters / 3.5)` tokens. The estimate is a fixed function of the request text and is never corrected from observed responses, so the same data and options always produce the same split and byte-identical request bodies, whatever the cache state (R17). Observed `usage.input_tokens` feed only cost and budget accounting (9.3, 9.4), never the size estimate or the split decision.
 - **Split by file.** If the estimate is above **26,000 tokens** (headroom under the 32k budget, [jev-guide.md](jev-guide.md) 2.5), items are split into **as few calls as fit**:
   - Group items by file path. Order the groups by path.
   - Pack whole groups into calls, first-fit in path order.
@@ -483,7 +487,7 @@ Code builds the state; Jev never sees anything else. Rules:
   - The PR body (context rot; see 14, question 13).
   - Later commits.
   - Timestamps.
-- Comment text is third-party input. It stays in named data fields and is never concatenated into `instructions` ([jev-guide.md](jev-guide.md) 3.2, last rows). The test suite includes injected text (12.3).
+- Comment text is third-party input. It stays in named data fields and is never concatenated into `instructions` ([jev-guide.md](jev-guide.md) 3.2, last rows). The test suite includes injected text (11.3).
 
 ### 5.4 Question set per item
 
@@ -692,11 +696,12 @@ Quiet Review calls GitHub's REST and GraphQL APIs directly with Octokit (`@octok
 | Thread resolution | GraphQL `pullRequest.reviewThreads { isResolved, comments }` |
 | Diff between the comment's commit and the final head (replay labels) | REST `GET /repos/{owner}/{repo}/compare/{from}...{to}` |
 | Replay candidate discovery | REST search `GET /search/issues` |
+| Repository visibility (private-repository policy, 8.3) | REST `GET /repos/{owner}/{repo}` (`private`, `visibility`) |
 
 **Read-only is enforced in code.**
 
 - The GitHub module wraps Octokit and throws before sending any REST request whose method is not `GET`, or any GraphQL document containing a `mutation` operation.
-- A test covers both (12.3).
+- A test covers both (11.3).
 - v0 needs no write scope: a fine-grained token with read access to public repositories is enough.
 
 GitHub responses fetched by `replay build` are cached in the replay directory (9.2). A rebuild makes no network calls.
@@ -715,6 +720,18 @@ Octokit's throttling and retry plugins handle GitHub's primary and secondary rat
 
 GitHub access and token handling get their own documentation page (12.1), because this is an open-source tool that many people will configure themselves.
 
+### 8.3 Private repositories
+
+`score <pr-url>` reads the repository's visibility (8.1) before any provider call, and applies this policy:
+
+- **Public repository:** score normally.
+- **Private repository, no opt-in:** stop before any Jev call with `PRIVATE_REPO_NOT_ALLOWED` (exit 2). The error's help line names the opt-in (`--allow-private`, or the `allow_private` list in the user config, 9.1) and the provider and model the data would be sent to.
+- **Opt-in:** per run with `--allow-private` (4.4), or standing per repository via the `allow_private` list in the user config. Entries are `owner/repo` strings; `*` allows any private repository and is never the default.
+- **Notice:** every private run prints one line naming what was sent (comment text, code hunks, PR title), the provider and model, and that zero retention was requested (5.1). The same notice is written to the cost log (9.3).
+- **`score --findings`:** no visibility check is possible; the file is treated as the user's explicit choice. It prints the same notice and never blocks (4.5).
+
+What is sent, to which provider, each provider's retention terms, and how to opt in or out are documented on the privacy page (12.1).
+
 ---
 
 ## 9. Keys, cache, cost log and budget
@@ -728,14 +745,15 @@ GitHub access and token handling get their own documentation page (12.1), becaus
   {
     "provider": "openrouter",
     "keys": { "openrouter": "sk-or-...", "typesafe": "..." },
+    "allow_private": ["acme/widgets"],
     "cutoffs": { "collapse_below": 0.27, "keep_at": 0.70, "replay": "public-v1", "snapshot": "typesafe/jev-1.13-20260917", "tested_collapse_below": 0.27, "written_at": "2026-10-01" }
   }
   ```
 
 - When the file holds keys, it must be readable only by its owner (mode `0600` or stricter on POSIX). Otherwise the CLI refuses to read it and prints a `chmod 600` hint (`CONFIG_PERMISSIONS`, exit 4).
 - `provider` in the file sets the default provider; `--provider` wins.
-- The repository config `./.quiet-review.json` may hold only `cutoffs`, never keys. A `keys` field there is `VALIDATION_ERROR`, so keys cannot be committed by accident.
-- **A key is never printed, logged, cached, put in a cache key, or included in an error message.** Every error path goes through a redactor that masks any configured key or token value and any `Authorization` header. Tests assert this (12.3).
+- The repository config `./.quiet-review.json` may hold only `cutoffs`, never keys or `allow_private`. A `keys` or `allow_private` field there is `VALIDATION_ERROR`, so keys cannot be committed by accident and privacy opt-in cannot be granted by a committed file (8.3).
+- **A key is never printed, logged, cached, put in a cache key, or included in an error message.** Every error path goes through a redactor that masks any configured key or token value and any `Authorization` header. Tests assert this (11.3).
 - A missing key is `MISSING_KEY` (exit 4), with help naming the env var. `--dry-run` and `--max-cost 0` (cache-only) work without a key.
 
 ### 9.2 Request cache
@@ -756,11 +774,12 @@ Append-only JSON Lines file at `$XDG_STATE_HOME/quiet-review-axi/calls.jsonl` (d
 ```
 
 No state text, question text, comment bodies, keys or tokens are written to this log. The home view's `spent_today_usd` is summed from it.
+Each line of a run that scored a private repository, or of a `--findings` run, also records that run's private-data notice (8.3).
 
 ### 9.4 Budget (`--max-cost`)
 
 - Scope: one run (one CLI invocation), covering **all** model spend in it: Jev calls and the replay's label-check calls. Default $0.50.
-- Before each paid call, code estimates the call's cost from its token estimate (5.2) with a 1.5× safety factor. If `spent + estimate > max_cost`, the call is not made.
+- Before each paid call, code estimates the call's cost from its token estimate (5.2) with a 1.5× safety factor. If `spent + estimate > max_cost`, the call is not made. After the call, spend uses the observed usage (reported cost, or `input_tokens` × price), never the estimate.
 - On stop, the run prints what it finished, sets `stopped: max-cost`, adds a help line with the command that resumes the run, and exits 3 (`BUDGET_STOP`). Everything already paid for is cached, so the resumed run pays only for the rest.
 - Cache hits cost nothing and never count toward the budget.
 
@@ -1034,13 +1053,14 @@ Octokit is constructed with the injected `fetch`, so one fake covers both GitHub
   - **duplicates** grouped under the earlier item, inside one call and across calls by exact text;
   - **`score --findings`:** valid input, missing `id` or `body` (exit 2 naming the finding), stdin, a missing hunk with and without `--repo-root`;
   - **splitting:** a PR over the budget packs file groups into the fewest calls, and `calls` reports the count;
-  - **determinism (R17):** the same fixture twice, and once with shuffled input order, gives byte-identical bodies and cache keys;
+  - **determinism (R17):** the same fixture twice, once with shuffled input order, and once against a cache warmed by a previous run's responses, gives byte-identical bodies and cache keys;
   - **cache:** a hit on a second run gives identical output, `cost_usd: 0`, `cached: true`, and no fetch;
   - **budget:** `--max-cost` stops before an over-budget call, prints partial results, exits 3, and a re-run resumes paying only the remainder;
   - `--max-cost 0` with an empty cache stops before any call;
   - **provider switch:** the same items produce the documented body for each provider (OpenRouter includes `provider` preferences, TypeSafe does not);
   - **error mapping and exit codes** for 401, 403, 402 (both kinds), 422, 429 with `Retry-After`, 529 and timeout, using fake timers;
   - **GitHub token:** lookup order across `GITHUB_TOKEN`, `GH_TOKEN` and `gh auth token`; `MISSING_GITHUB_TOKEN` and `GITHUB_NOT_FOUND` exit 4;
+  - **private repositories:** a private PR without opt-in stops before any Jev call (`PRIVATE_REPO_NOT_ALLOWED`, exit 2, help naming the opt-in and the destination provider); `--allow-private` and an `allow_private` entry (including `*`) proceed and print the notice; `--findings` prints the notice without blocking;
   - **invalid response:** a missing question id is rejected (exit 4) and not cached;
   - **redaction:** with a key and a GitHub token set, no output, error, cache file or log line contains either (checked by scanning every written byte);
   - **GitHub write protection:** the Octokit wrapper throws on a non-GET REST call or a GraphQL mutation;
@@ -1090,6 +1110,7 @@ It delivers detailed Markdown documentation under `docs/usage/` that teaches bot
 | `install.md` | Requirements (Node, a GitHub token), installing from the repository, upgrading, verifying the install |
 | `github-access.md` | How Quiet Review reads reviews (the REST and GraphQL calls of 8.1), why it is read-only and how that is enforced, token lookup order (`GITHUB_TOKEN`, `GH_TOKEN`, `gh auth token`), creating a minimal fine-grained token, GitHub Enterprise notes, rate limits, and token safety |
 | `keys-and-providers.md` | OpenRouter and TypeSafe keys, environment variables and the user config file (with permissions), `--provider`, the pinned model and snapshots, privacy settings, cost and `--max-cost` |
+| `privacy.md` | What Quiet Review sends and to whom: the cleaned comment text, code hunks and title that reach the provider; each provider's retention terms (OpenRouter ZDR preferences, TypeSafe terms); the private-repository policy, notice and cost-log record (8.3); and how to opt in (`--allow-private`, `allow_private`) or out |
 | `commands.md` | Every command and flag (`score <pr-url>`, `score --findings`, `replay` and its stages, `report`, home, `update`), each with real example invocations and outputs |
 | `findings-format.md` | The findings JSON format field by field, validation errors, hunk lookup with `--repo-root`, and the exact no-mistakes mapping with a ready-to-run conversion command |
 | `output-formats.md` | Compact TOON (default actionable-first view and `--all`), `--json` (field reference) and `--human`, exit codes and error codes, `help` hints |
@@ -1112,7 +1133,7 @@ Every example in these pages is produced by running the CLI, not written by hand
 - **Prompt injection.** Comment text is third-party input and can try to steer answers ([jev-guide.md](jev-guide.md) 3.2). Mitigations: data fields only, a test, and a replay experiment.
 - **Vendor format changes.** Bots change their comment markup. Body cleaning (5.3) is covered by tests with recorded examples per bot.
 - **Single model vendor.** The provider layer (section 7) keeps a later non-Jev backend a one-module change.
-- **Privacy.** v0 sends only public code. Private repositories need a documented retention story: OpenRouter ZDR routing, whose acceptance for Jev is still unverified.
+- **Privacy.** Scoring sends comment text and code hunks to the configured provider. Public repositories score normally; private repositories are scored only after an explicit opt-in, and every private run prints and logs what went where (8.3). Each provider's retention terms are documented (12.1); OpenRouter ZDR acceptance for Jev is still unverified (14, question 6).
 
 ---
 
