@@ -1,0 +1,33 @@
+import { appendFile, mkdir } from 'node:fs/promises'
+import { dirname } from 'node:path'
+
+// One JSON line per Jev call attempt, cache hits included (spec 9.3). Callers pass only
+// run facts: never state text, question text, comment bodies, keys or tokens.
+export interface CallLogLine {
+  ts: string
+  run: string
+  command: string
+  provider: string
+  model: string
+  question_pack: string
+  snapshot: string | null
+  response_id: string | null
+  request_hash: string
+  items: number
+  input_tokens: number | null
+  cost_usd: number
+  cost_source: 'reported' | 'computed' | null
+  cached: boolean
+  latency_ms: number | null
+  status: 'ok' | 'error'
+  retries?: number
+  error_code?: string
+  http_status?: number
+  error_body?: string
+  notice?: string
+}
+
+export async function appendCallLog(path: string, line: CallLogLine): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  await appendFile(path, `${JSON.stringify(line)}\n`, { mode: 0o600 })
+}

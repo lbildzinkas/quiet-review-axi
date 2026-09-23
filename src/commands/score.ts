@@ -1,9 +1,21 @@
+import { randomBytes } from 'node:crypto'
 import type { AppContext } from '../context.js'
 import { describeCutoffs, resolveCutoffs } from '../core/cutoffs.js'
 import type { Item } from '../core/items.js'
-import { buildRequests, type RequestHeader } from '../core/state.js'
+import { QUESTION_PACK_VERSION } from '../core/questions.js'
+import { buildRequests, estimateRequestTokens, type RequestHeader } from '../core/state.js'
 import { decideItems } from '../core/verdict.js'
-import { findApiKey, loadRepoConfig, loadUserConfig, missingKeyError } from '../infra/config.js'
+import { BudgetStop } from '../errors.js'
+import { cacheKey, readCacheEntry } from '../infra/cache.js'
+import {
+  findApiKey,
+  loadRepoConfig,
+  loadUserConfig,
+  missingKeyError,
+  type UserConfig,
+} from '../infra/config.js'
+import { cacheDir, callLogPath } from '../infra/paths.js'
+import { createRedactor } from '../infra/redact.js'
 import { loadFindings } from '../inputs/findings.js'
 import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
 import {
@@ -12,13 +24,13 @@ import {
   normalizeComments,
   parsePullRequestRef,
 } from '../inputs/pull-request.js'
-import { QUESTION_PACK_VERSION } from '../core/questions.js'
+import type { JevProvider } from '../jev/provider.js'
 import { PROVIDERS } from '../jev/providers.js'
 import { runRequests } from '../jev/run-requests.js'
-import { renderScore, roundCost } from '../output/render.js'
+import { renderDryRun, renderScore, roundCost } from '../output/render.js'
 import { parseScoreArgs, type ScoreOptions } from './score-args.js'
 
-interface ScoreInput {
+export interface ScoreInput {
   kind: 'pr' | 'findings'
   label: string
   // How to re-run this command in help lines, for example `score acme/widgets#412`.
@@ -42,42 +54,71 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
       ? await pullRequestInput(options, context)
       : await findingsInput(options, context)
   const requests = buildRequests({ header: input.header, items: input.items })
+  const cacheDirectory = cacheDir(context.env)
+
+  if (options.dryRun) {
+    const cachedFlags = await Promise.all(
+      requests.map(async (request) => {
+        const key = cacheKey({
+          provider: provider.name,
+          endpoint: provider.endpoint,
+          body: provider.buildBody(request),
+        })
+        return !options.noCache && (await readCacheEntry(cacheDirectory, key)) !== null
+      }),
+    )
+    return renderDryRun({
+      mode: options.output,
+      source: sourceView(input),
+      provider,
+      cutoffs: describeCutoffs(cutoffs, []),
+      items: input.items.length,
+      requests: requests.map((request, index) => ({
+        body: provider.buildBody(request),
+        items: request.itemKeys.length,
+        estimatedTokens: estimateRequestTokens(request),
+        isCached: cachedFlags[index] ?? false,
+      })),
+    })
+  }
+
   const run = await runRequests({
+    command: 'score',
+    runId: `r-${randomBytes(4).toString('hex')}`,
     provider,
     requests,
-    apiKey: () => {
-      const found = findApiKey(provider, context.env, userConfig)
-      if (!found) throw missingKeyError(provider)
-      return found.key
-    },
+    maxCostUsd: options.maxCost,
+    useCache: !options.noCache,
+    cacheDir: cacheDirectory,
+    callLogPath: callLogPath(context.env),
+    apiKey: () => requireApiKey(provider, context, userConfig),
     fetch: context.fetch,
     sleep: context.sleep,
     random: context.random,
+    now: context.now,
+    redact: createRedactor(secretsOf(context, userConfig)),
   })
+  const scoredKeys = new Set(run.calls.flatMap((call) => call.request.itemKeys))
+  const scoredItems = input.items.filter((item) => scoredKeys.has(item.key))
   const decisions = decideItems({
-    items: input.items,
-    calls: requests.map((request) => request.itemKeys),
+    items: scoredItems,
+    calls: run.calls.map((call) => call.request.itemKeys),
     answers: run.answers,
     cutoffs,
   })
   const snapshots = [...new Set(run.calls.map((call) => call.result.snapshot))]
-  const cutoffDescription = describeCutoffs(cutoffs, snapshots)
   const costUsd = run.calls.reduce(
     (total, call) => total + (call.cached ? 0 : call.result.costUsd),
     0,
   )
   const isCached = run.calls.length > 0 && run.calls.every((call) => call.cached)
-  return renderScore({
+  const isStopped = run.skipped.length > 0
+  const output = renderScore({
     mode: options.output,
     showAll: options.all,
     showFull: options.full,
-    source: {
-      kind: input.kind,
-      label: input.label,
-      title: input.header.title ?? null,
-      command: input.command,
-    },
-    cutoffs: cutoffDescription,
+    source: sourceView(input),
+    cutoffs: describeCutoffs(cutoffs, snapshots),
     provider: provider.name,
     snapshots,
     calls: run.calls.length,
@@ -85,6 +126,10 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
     isCached,
     decisions,
     answers: run.answers,
+    unscored: isStopped
+      ? input.items.filter((item) => !scoredKeys.has(item.key)).map((item) => item.id)
+      : [],
+    stop: isStopped ? { maxCost: options.maxCost } : null,
     run: {
       provider: provider.name,
       model_requested: provider.model,
@@ -93,8 +138,8 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
       cache_keys: run.calls.map((call) => call.cacheKey),
       cached: isCached,
       question_pack: QUESTION_PACK_VERSION,
-      questions: requests.reduce(
-        (total, request) => total + Object.keys(request.questions).length,
+      questions: run.calls.reduce(
+        (total, call) => total + Object.keys(call.request.questions).length,
         0,
       ),
       input_tokens: run.calls.reduce((total, call) => total + call.result.inputTokens, 0),
@@ -102,6 +147,34 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
       retries: run.calls.reduce((total, call) => total + call.result.retries, 0),
     },
   })
+  if (isStopped) throw new BudgetStop(output)
+  return output
+}
+
+function sourceView(input: ScoreInput) {
+  return {
+    kind: input.kind,
+    label: input.label,
+    title: input.header.title ?? null,
+    command: input.command,
+  }
+}
+
+function requireApiKey(provider: JevProvider, context: AppContext, userConfig: UserConfig): string {
+  const found = findApiKey(provider, context.env, userConfig)
+  if (!found) throw missingKeyError(provider)
+  return found.key
+}
+
+export function secretsOf(context: AppContext, userConfig: UserConfig): (string | undefined)[] {
+  return [
+    context.env.OPENROUTER_API_KEY,
+    context.env.TYPESAFE_API_KEY,
+    context.env.GITHUB_TOKEN,
+    context.env.GH_TOKEN,
+    userConfig.keys?.openrouter,
+    userConfig.keys?.typesafe,
+  ]
 }
 
 async function pullRequestInput(options: ScoreOptions, context: AppContext): Promise<ScoreInput> {

@@ -8,7 +8,7 @@ export type FetchHandler = (url: string, init: RequestInit) => Promise<Response>
 export interface Sandbox {
   root: string
   cwd: string
-  env: Record<string, string>
+  env: { XDG_CONFIG_HOME: string; XDG_CACHE_HOME: string; XDG_STATE_HOME: string; HOME: string }
   write: (relativePath: string, content: string, mode?: number) => string
   writtenFiles: () => { path: string; content: string }[]
 }
@@ -90,6 +90,7 @@ export async function runCli(argv: string[], options: RunOptions = {}): Promise<
     },
     sleep: options.sleep ?? (async () => {}),
     random: () => 0.5,
+    now: () => new Date('2026-09-24T10:00:00.000Z'),
   })
   return { stdout, stderr, exitCode, sandbox, fetchCalls, ghCalls }
 }

@@ -48,3 +48,12 @@ export function exitCodeFor(code: string): number {
 export function validationError(message: string, help: string[] = []) {
   return new QuietReviewError('VALIDATION_ERROR', message, help)
 }
+
+// A run stopped at --max-cost: the partial result is already rendered and goes to stdout
+// with exit 3 (spec 9.4).
+export class BudgetStop extends QuietReviewError {
+  constructor(readonly renderedOutput: string) {
+    super('BUDGET_STOP', 'Stopped at --max-cost')
+    this.name = 'BudgetStop'
+  }
+}

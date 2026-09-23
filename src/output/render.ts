@@ -2,6 +2,7 @@ import { encode } from '@toon-format/toon'
 import type { CutoffDescription } from '../core/cutoffs.js'
 import type { Decision, Verdict } from '../core/verdict.js'
 import type { OutputMode } from '../commands/score-args.js'
+import { JEV_PRICE_PER_INPUT_TOKEN } from '../jev/provider.js'
 import type { Answer } from '../jev/schema.js'
 import { renderHuman } from './human.js'
 
@@ -18,6 +19,9 @@ export interface ScoreView {
   isCached: boolean
   decisions: Decision[]
   answers: Record<string, Answer>
+  // Ids of items left unscored because the run stopped at --max-cost (spec 9.4).
+  unscored: string[]
+  stop: { maxCost: number } | null
   run: RunFacts
 }
 
@@ -58,15 +62,19 @@ function headerFields(view: ScoreView): Record<string, unknown> {
     [view.source.kind === 'pr' ? 'pr' : 'source']: view.source.label,
   }
   if (view.source.title !== null) header.title = view.source.title
-  return Object.assign(header, {
+  Object.assign(header, {
     verdicts: verdictCounts(view.decisions),
     cutoffs: view.cutoffs.line,
     provider: view.provider,
-    model: view.snapshots.join(', '),
+    model: view.snapshots.length > 0 ? view.snapshots.join(', ') : 'none',
     calls: view.calls,
     cost_usd: roundCost(view.costUsd),
     cached: view.isCached,
   })
+  if (view.stop)
+    Object.assign(header, { stopped: 'max-cost', code: 'BUDGET_STOP', unscored: view.unscored })
+  if (view.cutoffs.warnings.length > 0) header.warnings = view.cutoffs.warnings
+  return header
 }
 
 // One JSON document; field names match the TOON output (spec 4.4).
@@ -139,6 +147,11 @@ function groupDuplicates(rows: Decision[]): Decision[] {
 
 function helpLines(view: ScoreView, collapsed: number): string[] {
   const lines: string[] = []
+  if (view.stop)
+    lines.push(
+      `Run \`${BIN} ${view.source.command} --max-cost ${resumeLimit(view.stop.maxCost)}\` to resume; results already paid for are cached and cost nothing`,
+    )
+  lines.push(...view.cutoffs.help)
   if (collapsed > 0 && !view.showAll)
     lines.push(`Run \`${BIN} ${view.source.command} --all\` to see the collapsed comments' text`)
   lines.push(`Run \`${BIN} ${view.source.command} --json\` for raw answers and run facts`)
@@ -216,4 +229,74 @@ function round(value: number, digits: number): number {
 
 export function roundCost(value: number): number {
   return Number(value.toFixed(6))
+}
+
+function resumeLimit(maxCost: number): string {
+  return String(Math.max(0.5, maxCost * 2))
+}
+
+export interface DryRunView {
+  mode: OutputMode
+  source: ScoreView['source']
+  provider: { name: string; model: string }
+  cutoffs: CutoffDescription
+  items: number
+  requests: {
+    body: Record<string, unknown>
+    items: number
+    estimatedTokens: number
+    isCached: boolean
+  }[]
+}
+
+// --dry-run (spec 4.1): the requests that would be sent, with token and cost estimates.
+export function renderDryRun(view: DryRunView): string {
+  const estimatedTokens = view.requests.reduce(
+    (total, request) => total + request.estimatedTokens,
+    0,
+  )
+  const paidTokens = view.requests
+    .filter((request) => !request.isCached)
+    .reduce((total, request) => total + request.estimatedTokens, 0)
+  const header: Record<string, unknown> = {
+    [view.source.kind === 'pr' ? 'pr' : 'source']: view.source.label,
+  }
+  if (view.source.title !== null) header.title = view.source.title
+  Object.assign(header, {
+    dry_run: true,
+    provider: view.provider.name,
+    model: view.provider.model,
+    cutoffs: view.cutoffs.line,
+    items: view.items,
+    calls: view.requests.length,
+    estimated_input_tokens: estimatedTokens,
+    estimated_cost_usd: roundCost(estimateCost(paidTokens)),
+  })
+  const help = [`Run \`${BIN} ${view.source.command}\` to send the requests`]
+  const rows = view.requests.map((request, index) => ({
+    call: index + 1,
+    items: request.items,
+    estimated_tokens: request.estimatedTokens,
+    cached: request.isCached,
+  }))
+  if (view.mode === 'json')
+    return JSON.stringify(
+      {
+        ...header,
+        requests: rows.map((row, index) => ({ ...row, body: view.requests[index]?.body })),
+        help,
+      },
+      null,
+      2,
+    )
+  if (view.mode === 'human')
+    return [
+      [view.source.label, view.source.title].filter(Boolean).join('  '),
+      `Dry run: ${view.items} items in ${view.requests.length} ${view.requests.length === 1 ? 'call' : 'calls'} to ${view.provider.model} on ${view.provider.name}, about ${estimatedTokens} input tokens ($${estimateCost(paidTokens).toFixed(4)}). Nothing was sent.`,
+    ].join('\n')
+  return joinBlocks(encode({ ...header, requests: rows }), renderHelp(help))
+}
+
+function estimateCost(tokens: number): number {
+  return tokens * JEV_PRICE_PER_INPUT_TOKEN
 }

@@ -16,4 +16,5 @@ export interface AppContext {
   runGhAuthToken: () => Promise<string | undefined>
   sleep: (ms: number) => Promise<void>
   random: () => number
+  now: () => Date
 }

@@ -14,6 +14,7 @@ export async function runFromProcess(): Promise<number> {
     runGhAuthToken,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     random: Math.random,
+    now: () => new Date(),
   })
 }
 

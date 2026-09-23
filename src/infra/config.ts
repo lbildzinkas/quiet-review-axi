@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { QuietReviewError, validationError } from '../errors.js'
@@ -49,6 +49,15 @@ export async function loadUserConfig(context: ConfigContext): Promise<UserConfig
   const text = await readOptional(path)
   if (text === null) return {}
   const config = parseConfig(userConfigSchema, text, path)
+  if (config.keys !== undefined && process.platform !== 'win32') {
+    const { mode } = await stat(path)
+    if ((mode & 0o077) !== 0)
+      throw new QuietReviewError(
+        'CONFIG_PERMISSIONS',
+        `The config file ${path} holds keys but others can read it`,
+        [`Run \`chmod 600 ${path}\` so only you can read it`],
+      )
+  }
   return config
 }
 
@@ -115,4 +124,16 @@ export function missingKeyError(provider: { name: ProviderName; keyEnv: string }
   return new QuietReviewError('MISSING_KEY', `No API key for ${provider.name}`, [
     `Set \`${provider.keyEnv}\`, or add \`keys.${provider.name}\` to the user config file (mode 600)`,
   ])
+}
+
+// Key values from the user config, for the redactor. Unreadable or invalid files add none.
+export async function configSecrets(context: ConfigContext): Promise<string[]> {
+  const text = await readOptional(userConfigPath(context.env)).catch(() => null)
+  if (text === null) return []
+  try {
+    const keys = (JSON.parse(text) as { keys?: Record<string, unknown> }).keys ?? {}
+    return Object.values(keys).filter((value): value is string => typeof value === 'string')
+  } catch {
+    return []
+  }
 }
