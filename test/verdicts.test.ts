@@ -139,13 +139,16 @@ describe('verdicts', () => {
         decide({ type: 'choice', choice: 'c2', probabilities: { c2: 1 } }, [['c1', 'c2', 'c3']]),
       ).toBeNull()
       expect(
-        decide({ type: 'choice', choice: 'c1', probabilities: { c1: 1 } }, [['c1'], ['c2'], ['c3']]),
+        decide({ type: 'choice', choice: 'c1', probabilities: { c1: 1 } }, [
+          ['c1'],
+          ['c2'],
+          ['c3'],
+        ]),
       ).toBeNull()
       expect(
-        decide(
-          { type: 'choice', choice: 'c1', probabilities: { c1: 0.9, none: 0.1 } },
-          [['c1', 'c2', 'c3']],
-        ),
+        decide({ type: 'choice', choice: 'c1', probabilities: { c1: 0.9, none: 0.1 } }, [
+          ['c1', 'c2', 'c3'],
+        ]),
       ).toBe('c1')
     })
 

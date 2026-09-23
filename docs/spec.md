@@ -267,10 +267,10 @@ The TOON encoder quotes values that contain brackets, commas or quotes, and prin
 Rules for the output:
 
 - Headers always include `verdicts`, `cutoffs` (with their source and calibration state, 6.2), `calls` (how many Jev requests ran, D6), and the returned `model` snapshot.
-- Within `keep` and `unsure`, rows sort by severity descending, then `worth` descending, then id. `collapse` rows sort by id.
+- Within `keep` and `unsure`, rows sort by severity descending, then `worth` descending, then item order (creation order for PR comments, file order for findings). `collapse` rows stay in item order.
 - `worth` is the worth-acting-on probability. `severity` is the Score expectation (0.0-4.0).
 - `category` is the Choice argmax. A trailing `?` (for example `style?`) means its top probability is below 0.60.
-- `text` is the first 120 characters of the cleaned body (5.3), ending with `…` when cut. `--full` prints the whole cleaned body.
+- `text` is the first 120 characters of the cleaned body (5.3) with each whitespace run flattened to one space, ending with `…` when cut. `--full` prints the whole cleaned body.
 - `dup_of` names the earlier item this one duplicates, or `none` (6.4).
 - In `--all` mode, every item is printed in one `items[n]{id,verdict,worth,category,severity,dup_of,author,path,line,text}` table: keep rows, then unsure rows, then collapse rows, each group in its sort order, and a duplicate row directly after the row it duplicates, whatever its verdict, with its `dup_of` set (D7). In the default mode, a duplicate in `keep` or `unsure` is printed after the earlier row the same way when that row is in the same section.
 - `id` values (`c1`, `c2`, ...) are stable for a given PR: comments are numbered in creation order.
@@ -783,7 +783,7 @@ What is sent, to which provider, each provider's retention terms, and how to opt
 Append-only JSON Lines file at `$XDG_STATE_HOME/quiet-review-axi/calls.jsonl` (default `~/.local/state/quiet-review-axi/calls.jsonl`). One line per Jev or label-model call attempt, including cache hits:
 
 ```json
-{"ts":"2026-09-24T10:02:11.482Z","run":"r-7f3c","command":"score","provider":"openrouter","model":"typesafe/jev-1.13","snapshot":"typesafe/jev-1.13-20260917","response_id":"gen-dec-...","request_hash":"9b1e...","items":9,"input_tokens":4410,"cost_usd":0.000185,"cost_source":"reported","cached":false,"latency_ms":212,"status":"ok"}
+{"ts":"2026-09-24T10:02:11.482Z","run":"r-7f3c","command":"score","provider":"openrouter","model":"typesafe/jev-1.13","question_pack":"v0.1","snapshot":"typesafe/jev-1.13-20260917","response_id":"gen-dec-...","request_hash":"9b1e...","items":9,"input_tokens":4410,"cost_usd":0.000185,"cost_source":"reported","cached":false,"latency_ms":212,"status":"ok"}
 ```
 
 No state text, question text, comment bodies, keys or tokens are written to this log. The home view's `spent_today_usd` is summed from it.
