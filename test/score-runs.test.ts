@@ -330,7 +330,8 @@ describe('split pull requests', () => {
     const sandbox = createSandbox()
     const findings = Array.from({ length: 60 }, (_, index) => ({
       id: `f-${index + 1}`,
-      body: index === 59 ? 'Finding 1: '.padEnd(1900, 'z') : `Finding ${index + 1}: `.padEnd(1900, 'z'),
+      body:
+        index === 59 ? 'Finding 1: '.padEnd(1900, 'z') : `Finding ${index + 1}: `.padEnd(1900, 'z'),
       path: index === 59 ? 'src/z.ts' : `src/${'abc'[index % 3]}.ts`,
       line: index + 1,
       hunk: '+code',
@@ -338,7 +339,11 @@ describe('split pull requests', () => {
     const file = sandbox.write('work/split.json', JSON.stringify({ findings }))
     const jev = createFakeJev()
 
-    const result = await runCli(['score', '--findings', file, '--json'], { sandbox, env: KEY, fetch: jev.handle })
+    const result = await runCli(['score', '--findings', file, '--json'], {
+      sandbox,
+      env: KEY,
+      fetch: jev.handle,
+    })
 
     const document = JSON.parse(result.stdout)
     expect(document.calls).toBe(jev.calls.length)
@@ -355,13 +360,20 @@ describe('provider failures through the CLI', () => {
       handle: async () => jsonResponse(401, { error: { code: 401, message: 'User not found.' } }),
     })
 
-    const result = await runCli(['score', PR], { sandbox, env: { ...KEY, ...TOKEN }, fetch: rejecting })
+    const result = await runCli(['score', PR], {
+      sandbox,
+      env: { ...KEY, ...TOKEN },
+      fetch: rejecting,
+    })
 
     expect(result.exitCode).toBe(4)
     expect(result.stdout).toContain('code: PROVIDER_AUTH')
     expect(result.stdout).toContain('OPENROUTER_API_KEY')
     expect(cacheFiles(sandbox)).toEqual([])
-    expect(callLog(sandbox)[0]).toMatchObject({ status: 'error', error_code: 'PROVIDER_AUTH', http_status: 401 })
+    expect(callLog(sandbox)[0]).toMatchObject({
+      status: 'error',
+      error_code: 'PROVIDER_AUTH',
+      http_status: 401,
+    })
   })
 })
-
