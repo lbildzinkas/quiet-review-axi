@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { QuietReviewError } from '../errors.js'
+import { QuietReviewError, validationError } from '../errors.js'
+import type { Budget } from '../infra/budget.js'
 import { cacheKey, readCacheEntry, writeCacheEntry } from '../infra/cache.js'
 import { appendCallLog, type CallLogLine } from '../infra/call-log.js'
 import { postJson, type FetchLike } from '../jev/post.js'
@@ -8,6 +9,7 @@ import {
   buildLabelRequest,
   parseLabelAnswer,
   type AiLabel,
+  type ChatBody,
   type LabelledItem,
 } from './label-check.js'
 
@@ -44,6 +46,8 @@ export interface AiAnswer {
 
 export interface LabelModelOptions {
   sample: LabelledItem[]
+  // Shared by every paid call of the invocation (spec 9.4).
+  budget: Budget
   model: string
   runId: string
   callLogPath: string
@@ -57,10 +61,19 @@ export interface LabelModelOptions {
   now: () => Date
 }
 
-// Asks the label model about each sampled item in order, from the cache when it can. Every
-// attempt, cache hits included, is logged without any text (spec 9.3).
-export async function runLabelModel(options: LabelModelOptions): Promise<AiAnswer[]> {
+export interface LabelModelOutcome {
+  answers: AiAnswer[]
+  // Items left without an answer because the next paid call could have passed --max-cost.
+  unlabelled: string[]
+}
+
+// Asks the label model about each sampled item in order, from the cache when it can, and
+// pays for a call only while its padded estimate fits the budget. After a stop, cache hits
+// are still served. Every attempt, cache hits included, is logged without any text (spec 9.3).
+export async function runLabelModel(options: LabelModelOptions): Promise<LabelModelOutcome> {
   const answers: AiAnswer[] = []
+  const unlabelled: string[] = []
+  let pricing: Pricing | null = null
   for (const { item } of options.sample) {
     const body = buildLabelRequest(item, options.model)
     const key = cacheKey({ provider: PROVIDER, endpoint: CHAT_ENDPOINT, body })
@@ -87,6 +100,15 @@ export async function runLabelModel(options: LabelModelOptions): Promise<AiAnswe
       })
       continue
     }
+    if (unlabelled.length > 0 || !options.budget.hasRoom()) {
+      unlabelled.push(item.id)
+      continue
+    }
+    pricing ??= await fetchPricing(options)
+    if (!options.budget.canAffordUsd(estimateCostUsd(body, pricing))) {
+      unlabelled.push(item.id)
+      continue
+    }
     const started = performance.now()
     let response: ChatResponse
     try {
@@ -107,26 +129,95 @@ export async function runLabelModel(options: LabelModelOptions): Promise<AiAnswe
       throw error
     }
     const latencyMs = Math.round(performance.now() - started)
-    const costUsd = response.usage.cost ?? 0
+    const reported = response.usage.cost ?? undefined
+    const costUsd = reported ?? observedCostUsd(response, pricing)
+    const costSource = reported === undefined ? 'computed' : 'reported'
+    options.budget.spend(costUsd)
     await writeCacheEntry(options.cacheDir, key, {
       response,
       cachedAt: options.now().toISOString(),
       latencyMs,
       costUsd,
-      costSource: 'reported',
+      costSource,
     })
     answers.push(toAnswer(item.id, response, costUsd))
     await log(options, {
       ...baseLine,
       ...usageFields(response),
       cost_usd: costUsd,
-      cost_source: 'reported',
+      cost_source: costSource,
       cached: false,
       latency_ms: latencyMs,
       status: 'ok',
     })
   }
-  return answers
+  return { answers, unlabelled }
+}
+
+// The label model's prices, USD per token, from OpenRouter's public model list.
+export const MODELS_ENDPOINT = 'https://openrouter.ai/api/v1/models'
+
+interface Pricing {
+  prompt: number
+  completion: number
+  request: number
+}
+
+const price = z.coerce.number().nonnegative().optional()
+const modelsSchema = z.object({
+  data: z.array(
+    z.object({
+      id: z.string(),
+      pricing: z.object({ prompt: price, completion: price, request: price }).optional(),
+    }),
+  ),
+})
+
+async function fetchPricing(options: LabelModelOptions): Promise<Pricing> {
+  let response: Response
+  try {
+    response = await options.fetch(MODELS_ENDPOINT, { method: 'GET' })
+  } catch (error) {
+    throw new QuietReviewError(
+      'PROVIDER_ERROR',
+      `Could not read OpenRouter's model list: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  const parsed = response.ok ? modelsSchema.safeParse(await response.json()) : null
+  if (!parsed?.success)
+    throw new QuietReviewError(
+      'PROVIDER_ERROR',
+      `Could not read OpenRouter's model list (HTTP ${response.status})`,
+    )
+  const entry = parsed.data.data.find((model) => model.id === options.model)
+  if (!entry)
+    throw validationError(
+      `The label model ${options.model} in label_check.model is not a model OpenRouter lists`,
+      [
+        'The replay config is frozen once build has run: put the corrected model id in a config with a new replay name',
+      ],
+    )
+  return {
+    prompt: entry.pricing?.prompt ?? 0,
+    completion: entry.pricing?.completion ?? 0,
+    request: entry.pricing?.request ?? 0,
+  }
+}
+
+// A call's cost before it is made: its prompt tokens estimated like Jev requests
+// (characters / 3.5, spec 5.2), plus the most output the request allows.
+function estimateCostUsd(body: ChatBody, pricing: Pricing): number {
+  const promptTokens = Math.ceil(JSON.stringify(body.messages).length / 3.5)
+  return promptTokens * pricing.prompt + body.max_tokens * pricing.completion + pricing.request
+}
+
+function observedCostUsd(response: ChatResponse, pricing: Pricing): number {
+  const { usage } = response
+  return (
+    usage.prompt_tokens * pricing.prompt +
+    usage.completion_tokens * pricing.completion +
+    pricing.request
+  )
 }
 
 function usageFields(response: ChatResponse) {

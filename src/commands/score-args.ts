@@ -97,7 +97,7 @@ function parseAuthors(value: string | undefined): AuthorFilter {
   throw validationError(`--authors must be bots, humans or all, not ${value}`)
 }
 
-function parseNumber(flag: string, value: string | undefined): number | undefined {
+export function parseNumber(flag: string, value: string | undefined): number | undefined {
   if (value === undefined) return undefined
   const number = Number(value)
   if (value.trim() === '' || !Number.isFinite(number) || number < 0)

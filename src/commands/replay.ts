@@ -2,7 +2,9 @@ import { relative, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { encode } from '@toon-format/toon'
 import type { AppContext } from '../context.js'
-import { validationError } from '../errors.js'
+import { BudgetStop, validationError } from '../errors.js'
+import { createBudget, type Budget } from '../infra/budget.js'
+import { DEFAULT_MAX_COST, parseNumber } from './score-args.js'
 import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
 import { joinBlocks, renderHelp, roundCost } from '../output/render.js'
 import { MAX_REPOSITORIES, MIN_REPOSITORIES, runBuild, type DrawnItem } from '../replay/build.js'
@@ -38,6 +40,8 @@ import {
 
 const REPLAY_FLAGS = {
   stage: { type: 'string' },
+  'max-cost': { type: 'string' },
+  'no-cache': { type: 'boolean' },
   config: { type: 'string' },
   dir: { type: 'string' },
   json: { type: 'boolean' },
@@ -56,6 +60,12 @@ interface ReplayRun {
   manifest: Manifest
   context: AppContext
   asJson: boolean
+  // Covers every paid call of this invocation: the label model now, Jev later (spec 9.4).
+  maxCost: number
+  budget: Budget
+  useCache: boolean
+  // Set when the check stage stopped at --max-cost in this run.
+  checkStop?: { sampled: number; unlabelled: string[] }
   // Set when `build` searched for candidate repositories instead of building (spec 10.3).
   discovery?: Discovery
 }
@@ -66,6 +76,7 @@ export async function replayCommand(args: string[], context: AppContext): Promis
     throw validationError(`Unexpected arguments: ${positionals.slice(1).join(' ')}`)
   const name = positionals[0] ?? 'default'
   const stage = parseStage(values.stage)
+  const maxCost = parseNumber('--max-cost', values['max-cost']) ?? DEFAULT_MAX_COST
   const configPath = resolve(context.cwd, values.config ?? defaultConfigPath(context.cwd, name))
   const loaded = await loadReplayConfig(configPath, name)
   const dir =
@@ -77,6 +88,9 @@ export async function replayCommand(args: string[], context: AppContext): Promis
     manifest: await readManifest(dir, name),
     context,
     asJson: values.json ?? false,
+    maxCost,
+    budget: createBudget(maxCost),
+    useCache: !(values['no-cache'] ?? false),
   }
   assertPreRegistered(run)
 
@@ -87,7 +101,9 @@ export async function replayCommand(args: string[], context: AppContext): Promis
     if (next === 'label') await labelStage(run)
     if (next === 'check') await checkStage(run)
   }
-  return await renderReplay(run)
+  const output = await renderReplay(run)
+  if (run.checkStop) throw new BudgetStop(output)
+  return output
 }
 
 // Once `build` has run, the config is frozen: its hash was recorded (spec 4.6, 10.2).
@@ -188,7 +204,7 @@ async function checkStage(run: ReplayRun): Promise<void> {
   const previous = run.manifest.stages.check
   const { context } = run
   const userConfig = await loadUserConfig(context)
-  const record = await runCheck({
+  const outcome = await runCheck({
     files,
     sample: { size: run.loaded.config.label_check.sample_size, seed: run.loaded.config.seed },
     items: fromJsonl<DrawnItem>(itemsText),
@@ -201,7 +217,8 @@ async function checkStage(run: ReplayRun): Promise<void> {
       runId: `r-${randomBytes(4).toString('hex')}`,
       callLogPath: callLogPath(context.env),
       redact: createRedactor(secretsOf(context, userConfig)),
-      useCache: true,
+      budget: run.budget,
+      useCache: run.useCache,
       cacheDir: labelCacheDir(context.env),
       apiKey: () => {
         const found = findApiKey(openRouterProvider, context.env, userConfig)
@@ -214,6 +231,11 @@ async function checkStage(run: ReplayRun): Promise<void> {
       now: context.now,
     },
   })
+  if (outcome.kind === 'stopped') {
+    run.checkStop = outcome
+    return
+  }
+  const { record } = outcome
   if (previous?.input_hash === inputHash && sameOutcome(previous, record)) return
   run.manifest.stages.check = { input_hash: inputHash, ...record }
   await writeManifest(run.dir, run.manifest)
@@ -228,6 +250,12 @@ function sameOutcome(previous: StageRecord, next: Omit<StageRecord, 'input_hash'
 
 async function renderReplay(run: ReplayRun): Promise<string> {
   const stages = STAGES.map((stage) => {
+    if (stage === 'check' && run.checkStop)
+      return {
+        stage,
+        status: 'stopped',
+        detail: `${run.checkStop.sampled - run.checkStop.unlabelled.length} of ${run.checkStop.sampled} labelled, stopped at --max-cost ${run.maxCost}`,
+      }
     const record = run.manifest.stages[stage]
     if (record) return { stage, status: record.status ?? 'done', detail: record.detail }
     if (stage === 'build' && run.discovery)
@@ -246,6 +274,12 @@ async function renderReplay(run: ReplayRun): Promise<string> {
     config: relative(run.context.cwd, run.loaded.path),
     config_hash: run.loaded.hash,
     stages,
+  }
+  if (run.checkStop) {
+    view.stopped = 'max-cost'
+    view.code = 'BUDGET_STOP'
+    view.unlabelled = run.checkStop.unlabelled.length
+    view.run_cost_usd = roundCost(run.budget.spent())
   }
   const labelCheck = run.manifest.stages.check?.label_check
   if (labelCheck) {
@@ -295,6 +329,10 @@ function candidateRow(run: ReplayRun) {
 
 function helpLines(run: ReplayRun): string[] {
   const config = relative(run.context.cwd, run.loaded.path)
+  if (run.checkStop)
+    return [
+      `Run \`quiet-review-axi replay ${run.name} --stage check --max-cost ${Math.max(0.5, run.maxCost * 2)}\` to label the rest; labels already paid for come from the cache`,
+    ]
   if (run.discovery)
     return [
       `Run \`quiet-review-axi replay ${run.name}\` to build the dataset after listing ${MIN_REPOSITORIES}-${MAX_REPOSITORIES} qualifying repositories that cover at least 3 bots in \`repositories\` in ${config}, and committing it`,

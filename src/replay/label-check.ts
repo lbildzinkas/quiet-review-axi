@@ -135,13 +135,20 @@ function splitHunks(patch: string): { start: number; length: number; text: strin
 
 // The chat request for one item, built from the fixed template: the same item and model
 // always give the same body (R17). The automatic label is never sent.
-export function buildLabelRequest(item: DrawnItem, model: string): Record<string, unknown> {
+export interface ChatBody {
+  model: string
+  messages: { role: 'system' | 'user'; content: string }[]
+  temperature: number
+  max_tokens: number
+}
+
+export function buildLabelRequest(item: DrawnItem, model: string): ChatBody {
   const evidence = evidenceView(item)
   return {
     model,
     messages: [
-      { role: 'system', content: prompt.system.join('\n') },
-      { role: 'user', content: `${prompt.user}\n${JSON.stringify(evidence, null, 2)}` },
+      { role: 'system' as const, content: prompt.system.join('\n') },
+      { role: 'user' as const, content: `${prompt.user}\n${JSON.stringify(evidence, null, 2)}` },
     ],
     temperature: prompt.temperature,
     max_tokens: prompt.max_tokens,

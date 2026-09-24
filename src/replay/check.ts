@@ -41,8 +41,23 @@ export interface CheckOptions {
   model: Omit<LabelModelOptions, 'sample'>
 }
 
-export async function runCheck(options: CheckOptions): Promise<Omit<StageRecord, 'input_hash'>> {
-  const rows = options.needsModel ? await labelSample(options) : await readRows(options.files)
+export type CheckOutcome =
+  | { kind: 'record'; record: Omit<StageRecord, 'input_hash'> }
+  // The run stopped at --max-cost before every sampled item had an AI label (spec 9.4).
+  | { kind: 'stopped'; sampled: number; unlabelled: string[] }
+
+export async function runCheck(options: CheckOptions): Promise<CheckOutcome> {
+  const labelled = options.needsModel ? await labelSample(options) : null
+  if (labelled && 'unlabelled' in labelled)
+    return { kind: 'stopped', sampled: labelled.sampled, unlabelled: labelled.unlabelled }
+  const rows = labelled ?? (await readRows(options.files))
+  return { kind: 'record', record: await reviewOutcome(options, rows) }
+}
+
+async function reviewOutcome(
+  options: CheckOptions,
+  rows: CheckRow[],
+): Promise<Omit<StageRecord, 'input_hash'>> {
   const agreement = agreementOf(
     rows.map((row) => ({ automatic: row.automatic_label, ai: row.ai_label })),
   )
@@ -191,20 +206,29 @@ const REVIEW_HELP = [
   'Delete review.jsonl and run the check stage again to rewrite it without your labels',
 ]
 
-async function writeReview(options: CheckOptions, rows: CheckRow[]): Promise<void> {
+// Writes review.jsonl, keeping labels the maintainer already gave items that still await
+// review, so relabelling the sample never discards finished review work.
+async function writeReview(
+  options: CheckOptions,
+  rows: CheckRow[],
+  kept: Map<string, Label> = new Map(),
+): Promise<void> {
   const items = new Map(options.items.map((item) => [item.id, item]))
   const lines = rows.map((row) => {
     const item = items.get(row.id)
     if (!item) throw new Error(`No drawn item ${row.id}`)
-    return reviewLine(
+    const line = reviewLine(
       { item, label: row.automatic_label },
       { label: row.ai_label, reason: row.ai_reason },
     )
+    return { ...line, label: kept.get(row.id) ?? null }
   })
   await writeAtomic(options.files.review, toReviewJsonl(lines))
 }
 
-async function labelSample(options: CheckOptions): Promise<CheckRow[]> {
+async function labelSample(
+  options: CheckOptions,
+): Promise<CheckRow[] | { sampled: number; unlabelled: string[] }> {
   const labelled: LabelledItem[] = options.items.map((item) => ({
     item,
     label: options.labels.get(item.id) ?? 'excluded',
@@ -212,9 +236,10 @@ async function labelSample(options: CheckOptions): Promise<CheckRow[]> {
   const sample = drawCheckSample(labelled, options.sample).sort((a, b) =>
     compareText(a.item.id, b.item.id),
   )
-  const answers = new Map(
-    (await runLabelModel({ ...options.model, sample })).map((answer) => [answer.id, answer]),
-  )
+  const outcome = await runLabelModel({ ...options.model, sample })
+  if (outcome.unlabelled.length > 0)
+    return { sampled: sample.length, unlabelled: outcome.unlabelled }
+  const answers = new Map(outcome.answers.map((answer) => [answer.id, answer]))
   const rows: CheckRow[] = []
   for (const entry of sample) {
     const answer = answers.get(entry.item.id)
@@ -228,12 +253,29 @@ async function labelSample(options: CheckOptions): Promise<CheckRow[]> {
       cost_usd: answer.cost_usd,
     })
   }
+  const kept = await keptReviewLabels(options.files)
   await writeAtomic(options.files.check, toJsonl(rows))
   await writeReview(
     options,
     rows.filter((row) => row.ai_label !== row.automatic_label),
+    kept,
   )
   return rows
+}
+
+// The valid labels of an existing review.jsonl, read leniently: it is about to be rewritten.
+async function keptReviewLabels(files: CheckFiles): Promise<Map<string, Label>> {
+  const kept = new Map<string, Label>()
+  for (const raw of ((await readOptional(files.review)) ?? '').split('\n')) {
+    try {
+      const line = JSON.parse(raw) as { id?: unknown; label?: unknown }
+      if (typeof line.id === 'string' && REVIEW_LABELS.has(line.label))
+        kept.set(line.id, line.label as Label)
+    } catch {
+      // Blank or broken lines carry no label to keep.
+    }
+  }
+  return kept
 }
 
 async function readRows(files: CheckFiles): Promise<CheckRow[]> {

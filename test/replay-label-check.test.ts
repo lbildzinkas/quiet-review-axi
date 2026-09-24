@@ -385,3 +385,84 @@ describe('label-model calls: log, cache and cost (spec 9.2, 9.3)', () => {
     expect(result.stdout).toContain('label_model: example/label-model')
   })
 })
+
+// Output costs $0.00001 a token and input is free, so each call is estimated at
+// 1024 * 0.00001 * 1.5 = $0.01536 before it is made; each answer reports $0.01.
+const PRICED = {
+  models: { 'example/label-model': { prompt: '0', completion: '0.00001' } },
+  cost: 0.01,
+}
+
+describe('label-check budget (spec 9.4)', () => {
+  it('stops before a call that could pass --max-cost, exits 3, and a re-run pays only for the rest', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    const firstModel = createFakeLabelModel(PRICED)
+    const stopped = await runReplay(
+      ['public-v1', '--max-cost', '0.03'],
+      sandbox,
+      gitHub,
+      firstModel,
+    )
+    const secondModel = createFakeLabelModel(PRICED)
+
+    const resumed = await runReplay(
+      ['public-v1', '--max-cost', '0.5'],
+      sandbox,
+      gitHub,
+      secondModel,
+    )
+
+    expect(stopped.exitCode).toBe(3)
+    expect(stopped.stdout).toContain('check,stopped,"2 of 4 labelled, stopped at --max-cost 0.03"')
+    expect(stopped.stdout).toContain('stopped: max-cost')
+    expect(stopped.stdout).toContain('code: BUDGET_STOP')
+    expect(stopped.stdout).toContain('unlabelled: 2')
+    expect(stopped.stdout).toContain('run_cost_usd: 0.02')
+    expect(stopped.stdout).toContain('--max-cost')
+    expect(firstModel.chatCalls).toHaveLength(2)
+    expect(resumed.exitCode).toBe(0)
+    expect(secondModel.chatCalls).toHaveLength(2)
+    expect(resumed.stdout).toContain('check,waiting,"4 sampled')
+    expect(resumed.stdout).toContain('label_check_cost_usd: 0.04')
+  })
+
+  it('makes no call with --max-cost 0 and an empty cache, and needs no key for that', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    const labelModel = createFakeLabelModel()
+
+    const result = await runReplay(['public-v1', '--max-cost', '0'], sandbox, gitHub, labelModel, {
+      env: { OPENROUTER_API_KEY: '' },
+    })
+
+    expect(result.exitCode).toBe(3)
+    expect(result.stdout).toContain('check,stopped,"0 of 4 labelled, stopped at --max-cost 0"')
+    expect(labelModel.chatCalls).toHaveLength(0)
+    expect(labelModel.pricingCalls).toHaveLength(0)
+  })
+
+  it('refuses a label model that OpenRouter does not list', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    const labelModel = createFakeLabelModel({
+      models: { 'other/model': PRICED.models['example/label-model'] },
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toContain('code: VALIDATION_ERROR')
+    expect(result.stdout).toContain('example/label-model')
+    expect(labelModel.chatCalls).toHaveLength(0)
+  })
+
+  it('needs an OpenRouter key for a paid call', async () => {
+    const { sandbox, gitHub } = setupReplay()
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel(), {
+      env: { OPENROUTER_API_KEY: '' },
+    })
+
+    expect(result.exitCode).toBe(4)
+    expect(result.stdout).toContain('code: MISSING_KEY')
+    expect(result.stdout).toContain('OPENROUTER_API_KEY')
+  })
+})
