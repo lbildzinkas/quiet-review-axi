@@ -81,7 +81,7 @@ async function buildStage(run: ReplayRun): Promise<void> {
   const token = await requireGitHubToken(context.env, context.runGhAuthToken)
   const client = createGitHubClient({
     token: token.token,
-    fetch: createReplayFetch(context),
+    fetch: createReplayFetch({ ...context, cacheDir: replayFiles(run.dir).github }),
     callerPacesSearch: true,
   })
   const build = await runBuild({ config: run.loaded.config, client })
