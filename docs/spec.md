@@ -87,7 +87,7 @@ Where a later design-review decision (2.2) amends a requirement, the requirement
 | R15 | TypeScript on Node, built on `axi-sdk-js`. Installed from the repository; published to npm only after the replay passes. |
 | R16 | Every change goes through a full no-mistakes review, and the maintainer approves each merge. |
 
-### 2.2 Design review (D1-D12)
+### 2.2 Design review (D1-D13)
 
 A visual prototype of the CLI was reviewed after the grilling. These decisions are settled.
 
@@ -365,7 +365,7 @@ quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [-
 |---|---|---|
 | `build` | Selects PRs and comments from GitHub per the replay config and sampling rules (10.2-10.4). Stores normalized items and their evidence. | No (GitHub read only) |
 | `label` | Computes automatic ground-truth labels (10.5). | No |
-| `check` | Draws the label-check sample and asks the strong AI model for independent labels; writes the disagreement file for the maintainer (10.6). | Yes (label model) |
+| `check` | Draws the label-check sample and asks the strong AI model for independent labels; writes the disagreement file for the maintainer (10.6). | Yes (label model; the Pi backend costs $0, 10.6) |
 | `score` | Scores every labelled item with Jev (section 5), batched per PR (5.2). | Yes (Jev) |
 | `evaluate` | Computes the metrics and applies the pass rule (10.7-10.8). Writes `result.json`. On a pass, writes the calibrated cut-offs to the user config (6.2). | No |
 

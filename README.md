@@ -145,6 +145,7 @@ The write keeps every other field in the file, leaves the file readable only by 
 Before it replaces existing cut-offs, `evaluate` prints the old values.
 A replay that fails, is inconclusive, or cannot reach a verdict (for example while your review of the label check is unfinished) writes nothing, and an inconclusive replay cannot serve as the baseline for `gate` either.
 The replay tests only the collapse cut-off.
+`quiet-review-axi report` shows how often comments at or above `keep_at` were real, so you can judge the keep cut-off yourself.
 
 ### Which model checks the labels
 
@@ -158,7 +159,6 @@ Answers are cached, so a re-run after a failure asks only about the comments sti
 A subscription is meant for modest use: the check makes about 60 calls once per dataset.
 Check that your provider's terms allow this kind of scripted use before you pick it.
 Jev scoring always goes through OpenRouter or the TypeSafe API, never through a subscription.
-`quiet-review-axi report` shows how often comments at or above `keep_at` were real, so you can judge the keep cut-off yourself.
 
 ### When to calibrate again
 
