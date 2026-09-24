@@ -4,7 +4,7 @@ import { encode } from '@toon-format/toon'
 import type { AppContext } from '../context.js'
 import { validationError } from '../errors.js'
 import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
-import { joinBlocks, renderHelp } from '../output/render.js'
+import { joinBlocks, renderHelp, roundCost } from '../output/render.js'
 import { MAX_REPOSITORIES, MIN_REPOSITORIES, runBuild, type DrawnItem } from '../replay/build.js'
 import { defaultConfigPath, loadReplayConfig, type LoadedReplayConfig } from '../replay/config.js'
 import { runDiscovery, type Discovery, type DiscoveredRepository } from '../replay/discover.js'
@@ -15,7 +15,10 @@ import { labelComment, type Label } from '../replay/label.js'
 import { LABEL_PROMPT_VERSION } from '../replay/label-check.js'
 import { runCheck } from '../replay/check.js'
 import { canonicalJson } from '../infra/canonical-json.js'
-import { labelCacheDir } from '../infra/paths.js'
+import { callLogPath, labelCacheDir } from '../infra/paths.js'
+import { createRedactor } from '../infra/redact.js'
+import { secretsOf } from './score.js'
+import { randomBytes } from 'node:crypto'
 import type { Rejection } from '../replay/select.js'
 import {
   fromJsonl,
@@ -195,6 +198,9 @@ async function checkStage(run: ReplayRun): Promise<void> {
     needsModel: previous?.input_hash !== inputHash,
     model: {
       model: run.loaded.config.label_check.model,
+      runId: `r-${randomBytes(4).toString('hex')}`,
+      callLogPath: callLogPath(context.env),
+      redact: createRedactor(secretsOf(context, userConfig)),
       useCache: true,
       cacheDir: labelCacheDir(context.env),
       apiKey: () => {
@@ -243,6 +249,8 @@ async function renderReplay(run: ReplayRun): Promise<string> {
   }
   const labelCheck = run.manifest.stages.check?.label_check
   if (labelCheck) {
+    view.label_model = labelCheck.model
+    view.label_check_cost_usd = roundCost(labelCheck.cost_usd)
     view.trust = labelCheck.trust
     if (labelCheck.trust_reasons.length > 0) view.trust_reasons = labelCheck.trust_reasons
   }

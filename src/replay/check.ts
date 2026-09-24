@@ -75,6 +75,8 @@ export async function runCheck(options: CheckOptions): Promise<Omit<StageRecord,
       corrected: corrected.length,
     },
     label_check: {
+      model: options.model.model,
+      cost_usd: rows.reduce((total, row) => total + row.cost_usd, 0),
       agreement: agreement.agreement,
       kappa: agreement.kappa,
       overturn_rate: overturnRate,

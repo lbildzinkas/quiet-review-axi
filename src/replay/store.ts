@@ -24,6 +24,9 @@ export interface StageRecord {
   warnings?: string[]
   // Agreement figures and the trust gate (check stage, spec 10.6).
   label_check?: {
+    model: string
+    // What the sample's answers cost when they were paid for; cache hits count their first cost.
+    cost_usd: number
     agreement: number | null
     kappa: number | null
     overturn_rate: number | null

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createFakeLabelModel } from './helpers/fake-label-model.js'
@@ -331,5 +331,57 @@ describe('label-model request (spec 10.6 step 2)', () => {
     expect(secondModel.chatCalls.map((call) => call.body)).toEqual(
       firstModel.chatCalls.map((call) => call.body),
     )
+  })
+})
+
+describe('label-model calls: log, cache and cost (spec 9.2, 9.3)', () => {
+  it('logs every label-model call with its cost and snapshot, and never the comment text', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    const labelModel = createFakeLabelModel({ snapshot: 'example/label-model-20260901' })
+
+    await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+
+    const logPath = join(sandbox.env.XDG_STATE_HOME, 'quiet-review-axi', 'calls.jsonl')
+    const lines = readJsonl(logPath)
+    expect(lines).toHaveLength(4)
+    expect(lines[0]).toMatchObject({
+      command: 'replay',
+      provider: 'openrouter',
+      model: 'example/label-model',
+      prompt: 'label-check-v1',
+      snapshot: 'example/label-model-20260901',
+      response_id: 'gen-chat-1',
+      items: 1,
+      cost_usd: 0.002,
+      cost_source: 'reported',
+      cached: false,
+      status: 'ok',
+    })
+    expect(readFileSync(logPath, 'utf8')).not.toContain('null dereference')
+  })
+
+  it('serves a repeated check from the cache: no call, no cost, a cached log line', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    const first = await runReplay(['public-v1'], sandbox, gitHub)
+    rmSync(replayPath(sandbox, 'manifest.json'))
+    const labelModel = createFakeLabelModel()
+
+    const again = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+
+    expect(labelModel.chatCalls).toHaveLength(0)
+    expect(again.stdout).toBe(first.stdout)
+    const lines = readJsonl(join(sandbox.env.XDG_STATE_HOME, 'quiet-review-axi', 'calls.jsonl'))
+    expect(lines.slice(4).map((line) => [line.cached, line.cost_usd])).toEqual(
+      Array(4).fill([true, 0]),
+    )
+  })
+
+  it('reports what the label check cost', async () => {
+    const { sandbox, gitHub } = setupReplay()
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('label_check_cost_usd: 0.008')
+    expect(result.stdout).toContain('label_model: example/label-model')
   })
 })
