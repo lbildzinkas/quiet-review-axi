@@ -30,6 +30,7 @@ const REPLAY_FLAGS = {
   stage: { type: 'string' },
   config: { type: 'string' },
   dir: { type: 'string' },
+  json: { type: 'boolean' },
 } as const
 
 // Stages this version implements; the rest come with later milestones (spec 12).
@@ -41,6 +42,7 @@ interface ReplayRun {
   loaded: LoadedReplayConfig
   manifest: Manifest
   context: AppContext
+  asJson: boolean
   // Set when `build` searched for candidate repositories instead of building (spec 10.3).
   discovery?: Discovery
 }
@@ -55,7 +57,14 @@ export async function replayCommand(args: string[], context: AppContext): Promis
   const loaded = await loadReplayConfig(configPath, name)
   const dir =
     values.dir === undefined ? replayDir(context.cwd, name) : resolve(context.cwd, values.dir)
-  const run: ReplayRun = { name, dir, loaded, manifest: await readManifest(dir, name), context }
+  const run: ReplayRun = {
+    name,
+    dir,
+    loaded,
+    manifest: await readManifest(dir, name),
+    context,
+    asJson: values.json ?? false,
+  }
   assertPreRegistered(run)
 
   for (const next of stage === undefined ? AVAILABLE_STAGES : [stage]) {
@@ -132,11 +141,15 @@ async function labelStage(run: ReplayRun): Promise<void> {
   await writeAtomic(files.labels, toJsonl(labels))
   const count = (label: string) => labels.filter((entry) => entry.label === label).length
   const counts = { real: count('real'), noise: count('noise'), excluded: count('excluded') }
+  const excludedByReason: Record<string, number> = {}
+  for (const { reason } of labels)
+    if (reason !== null) excludedByReason[reason] = (excludedByReason[reason] ?? 0) + 1
   run.manifest.stages.label = {
     input_hash: inputHash,
     detail: `real ${counts.real}, noise ${counts.noise}, excluded ${counts.excluded}`,
     completed_at: run.context.now().toISOString(),
     counts,
+    excluded_by_reason: excludedByReason,
   }
   await writeManifest(run.dir, run.manifest)
 }
@@ -164,12 +177,22 @@ async function renderReplay(run: ReplayRun): Promise<string> {
   }
   const warnings = run.manifest.stages.build?.warnings ?? []
   if (warnings.length > 0) view.warnings = warnings
+  const excluded = Object.entries(run.manifest.stages.label?.excluded_by_reason ?? {})
+    .sort((a, b) => b[1] - a[1] || compareText(a[0], b[0]))
+    .map(([reason, count]) => ({ reason, count }))
+  if (excluded.length > 0) view.excluded = excluded
   if (run.discovery) view.candidates = run.discovery.candidates.map(candidateRow(run))
   const buildLog = await readOptional(replayFiles(run.dir).buildLog)
   const rejected = buildLog === null ? [] : fromJsonl<Rejection>(buildLog)
   if (rejected.length > 0)
     view.rejected = rejected.map(({ kind, candidate, reason }) => ({ kind, candidate, reason }))
+  if (run.asJson) return JSON.stringify({ ...view, help: helpLines(run) }, null, 2)
   return joinBlocks(encode(view), renderHelp(helpLines(run)))
+}
+
+function compareText(a: string, b: string): number {
+  if (a < b) return -1
+  return a > b ? 1 : 0
 }
 
 function candidateRow(run: ReplayRun) {
@@ -219,3 +242,31 @@ function parseFlags(args: string[]) {
     ])
   }
 }
+
+export const REPLAY_HELP = joinBlocks(
+  encode({
+    command: 'replay',
+    usage:
+      'quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [--config <file>] [--dir <path>]',
+    description:
+      'Builds the public replay dataset and its automatic labels, in resumable stages stored in a replay directory',
+    stages: {
+      build: 'Select repositories, bots and comments from GitHub per the replay config (read only)',
+      label: 'Label every drawn comment real, noise or excluded from the recorded evidence',
+      check: 'Not available in this version yet',
+      score: 'Not available in this version yet',
+      evaluate: 'Not available in this version yet',
+    },
+    flags: {
+      '--stage <build|label|check|score|evaluate>':
+        'Run only this stage (default: every stage not yet complete)',
+      '--config <file>': 'Replay config (default: replay/<name>.config.json)',
+      '--dir <path>': 'Replay directory (default: .quiet-review/replays/<name>)',
+      '--json': 'Emit one JSON document',
+    },
+    exit_codes: '0 ok, 1 unexpected, 2 validation or changed config, 4 GitHub problem',
+  }),
+  renderHelp([
+    'Run `quiet-review-axi replay public-v1` to build and label the replay configured in replay/public-v1.config.json',
+  ]),
+)

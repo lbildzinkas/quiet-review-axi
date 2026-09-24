@@ -16,6 +16,8 @@ export interface StageRecord {
   detail: string
   completed_at: string
   counts?: Record<string, number>
+  // Excluded items by reason (label stage).
+  excluded_by_reason?: Record<string, number>
   warnings?: string[]
 }
 

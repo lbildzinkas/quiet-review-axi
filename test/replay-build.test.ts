@@ -365,3 +365,68 @@ describe('candidate discovery (spec 10.3)', () => {
     expect(result.stdout).toContain('build,done,"1 repos, 1 bots, 4 comments from 4 PRs"')
   })
 })
+
+describe('replay output', () => {
+  it('counts exclusions by reason', async () => {
+    const { sandbox, gitHub } = setup({
+      config: { target_items: 100 },
+      specs: [
+        {
+          name: 'acme/widgets',
+          bots: { 'coderabbitai[bot]': 10 },
+          comment: ({ pr }) => (pr <= 2 ? { side: 'LEFT' } : {}),
+          replies: ({ pr }) =>
+            pr === 3 ? [{ login: 'alice', body: 'Thanks! Though this is by design.' }] : [],
+        },
+      ],
+    })
+
+    const result = await replay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('label,done,"real 3, noise 4, excluded 3"')
+    expect(result.stdout).toContain(
+      'excluded[2]{reason,count}:\n  anchor unmapped,2\n  conflicting replies,1',
+    )
+  })
+
+  it('emits one JSON document with --json and writes progress to stderr', async () => {
+    const { sandbox, gitHub } = setup()
+
+    const result = await replay(['public-v1', '--json'], sandbox, gitHub)
+
+    const document = JSON.parse(result.stdout) as Record<string, unknown>
+    expect(document.replay).toBe('public-v1')
+    expect(document.stages).toContainEqual({
+      stage: 'label',
+      status: 'done',
+      detail: 'real 2, noise 2, excluded 0',
+    })
+    expect(result.stderr).toContain('build: checking acme/widgets')
+  })
+
+  it('explains the stages and flags with --help', async () => {
+    const result = await runCli(['replay', '--help'])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('--stage <build|label|check|score|evaluate>')
+    expect(result.stdout).toContain('--config <file>')
+    expect(result.stdout).toContain('--dir <path>')
+  })
+
+  it('maps GitHub failures to exit 4 and leaves the build to resume', async () => {
+    const { sandbox } = setup()
+
+    const missing = await runCli(['replay', 'public-v1'], { sandbox })
+    const rejected = await runCli(['replay', 'public-v1'], {
+      sandbox,
+      env: TOKEN,
+      fetch: async () => new Response('{"message":"Bad credentials"}', { status: 401 }),
+    })
+
+    expect(missing.exitCode).toBe(4)
+    expect(missing.stdout).toContain('code: MISSING_GITHUB_TOKEN')
+    expect(rejected.exitCode).toBe(4)
+    expect(rejected.stdout).toContain('code: GITHUB_AUTH')
+    expect(rejected.stdout).not.toContain(TOKEN.GITHUB_TOKEN)
+  })
+})
