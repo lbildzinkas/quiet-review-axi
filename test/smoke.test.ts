@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import { createFakeJev } from './helpers/fake-jev.js'
 import { runCli } from './helpers/run-cli.js'
 
@@ -100,19 +101,46 @@ describe('smoke command', () => {
   })
 })
 
+interface WorkflowStep {
+  run?: string
+  env?: Record<string, string>
+  with?: Record<string, string>
+}
+
+interface Workflow {
+  env?: Record<string, string>
+  jobs: Record<string, { env?: Record<string, string>; steps?: WorkflowStep[] }>
+}
+
 describe('automated checks', () => {
   it('never call Jev: CI runs only the offline checks and holds no provider key', () => {
-    const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+    const workflow = parse(
+      readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+    ) as Workflow
+    const jobs = Object.values(workflow.jobs)
+    const steps = jobs.flatMap((job) => job.steps ?? [])
+    const inputs = [
+      ...Object.entries(workflow.env ?? {}),
+      ...jobs.flatMap((job) => Object.entries(job.env ?? {})),
+      ...steps.flatMap((step) => [
+        ...Object.entries(step.env ?? {}),
+        ...Object.entries(step.with ?? {}),
+      ]),
+    ]
+    const providerKeyOrSecret = /OPENROUTER_API_KEY|TYPESAFE_API_KEY|secrets\./
 
-    expect(workflow).not.toMatch(/OPENROUTER_API_KEY|TYPESAFE_API_KEY|secrets\./)
-    expect(workflow).not.toMatch(/quiet-review-axi (score|replay|gate|smoke)/)
-    expect(workflow.match(/- run: .+/g)).toEqual([
-      '- run: npm ci',
-      '- run: npm run lint',
-      '- run: npm run format:check',
-      '- run: npm run typecheck',
-      '- run: npm test',
-      '- run: npm run build',
+    expect(steps.flatMap((step) => (step.run === undefined ? [] : [step.run]))).toEqual([
+      'npm ci',
+      'npm run lint',
+      'npm run format:check',
+      'npm run typecheck',
+      'npm test',
+      'npm run build',
     ])
+    expect(
+      inputs.filter(
+        ([key, value]) => providerKeyOrSecret.test(key) || providerKeyOrSecret.test(value),
+      ),
+    ).toEqual([])
   })
 })
