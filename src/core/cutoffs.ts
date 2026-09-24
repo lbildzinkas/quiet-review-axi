@@ -1,3 +1,4 @@
+import { driftedSnapshots } from '../calibration/index.js'
 import { validationError } from '../errors.js'
 
 export type CutoffSource = 'flag' | 'repo config' | 'user config' | 'built-in'
@@ -90,7 +91,8 @@ export function describeCutoffs(cutoffs: ResolvedCutoffs, snapshots: string[]): 
   const usesCalibration =
     cutoffs.calibration !== null &&
     (cutoffs.collapseSource === 'user config' || cutoffs.keepSource === 'user config')
-  const newSnapshots = snapshots.filter((snapshot) => snapshot !== cutoffs.calibration?.snapshot)
+  const newSnapshots =
+    cutoffs.calibration === null ? [] : driftedSnapshots(cutoffs.calibration.snapshot, snapshots)
   const isStale = usesCalibration && newSnapshots.length > 0
   const state = (source: CutoffSource) => {
     if (source === 'built-in') return 'uncalibrated'
