@@ -91,7 +91,7 @@ function groupStrata<T extends Candidate>(candidates: T[]): T[][] {
     .map(([, members]) => members.sort((a, b) => compareText(a.key, b.key)))
 }
 
-function shuffle<T>(items: T[], random: () => number): T[] {
+export function shuffle<T>(items: T[], random: () => number): T[] {
   const shuffled = [...items]
   for (let index = shuffled.length - 1; index > 0; index--) {
     const other = Math.floor(random() * (index + 1))

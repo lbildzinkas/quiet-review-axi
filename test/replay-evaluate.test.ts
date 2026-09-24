@@ -46,7 +46,7 @@ describe('replay evaluate stage', () => {
   it('passes on the measured values and writes the calibrated cut-offs with provenance', async () => {
     const { sandbox, gitHub } = tenPullRequests()
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, jevScoring(0.9, 0.1))
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { jev: jevScoring(0.9, 0.1) })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('evaluate,done,"pass: auroc 1, best threshold 0.11"')
@@ -85,7 +85,7 @@ describe('replay evaluate stage', () => {
   it('fails when AUROC is below the pre-registered minimum, and writes no cut-offs', async () => {
     const { sandbox, gitHub } = tenPullRequests()
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, jevScoring(0.4, 0.6))
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { jev: jevScoring(0.4, 0.6) })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('evaluate,done,"fail: auroc 0, best threshold 0.01"')
@@ -99,7 +99,7 @@ describe('replay evaluate stage', () => {
       snapshot: (call) => (call <= 5 ? SNAPSHOT : 'typesafe/jev-1.13-20261001'),
     })
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, jev)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     expect(result.stdout).toContain(
       'evaluate,done,"refused: scored on 2 snapshots; re-score on one before the pass rule applies"',
@@ -124,7 +124,7 @@ describe('replay evaluate stage', () => {
       }),
     )
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, jevScoring(0.9, 0.1))
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { jev: jevScoring(0.9, 0.1) })
 
     expect(result.stdout).toContain('cutoffs_replaced: collapse<0.25 keep>=0.75 (hand-set)')
     const written = JSON.parse(readFileSync(userConfigPath(sandbox), 'utf8'))
@@ -136,7 +136,7 @@ describe('replay evaluate stage', () => {
   it('raises keep_at to the chosen threshold when the threshold is above 0.70', async () => {
     const { sandbox, gitHub } = tenPullRequests()
 
-    await runReplay(['public-v1'], sandbox, gitHub, jevScoring(0.95, 0.8))
+    await runReplay(['public-v1'], sandbox, gitHub, { jev: jevScoring(0.95, 0.8) })
 
     const written = JSON.parse(readFileSync(userConfigPath(sandbox), 'utf8'))
     expect(written.cutoffs).toMatchObject({ collapse_below: 0.81, keep_at: 0.81 })
@@ -145,7 +145,7 @@ describe('replay evaluate stage', () => {
   it('logs each evaluation with the question pack, snapshot and results', async () => {
     const { sandbox, gitHub } = tenPullRequests()
 
-    await runReplay(['public-v1'], sandbox, gitHub, jevScoring(0.9, 0.1))
+    await runReplay(['public-v1'], sandbox, gitHub, { jev: jevScoring(0.9, 0.1) })
 
     expect(readJsonl(replayPath(sandbox, 'runs.jsonl'))).toEqual([
       {
@@ -171,7 +171,7 @@ describe('replay evaluate stage', () => {
   it('treats a re-run with unchanged scores as a no-op, and refuses evaluate before score', async () => {
     const { sandbox, gitHub } = tenPullRequests()
     const early = await runReplay(['public-v1', '--stage', 'evaluate'], sandbox, gitHub)
-    await runReplay(['public-v1'], sandbox, gitHub, jevScoring(0.9, 0.1))
+    await runReplay(['public-v1'], sandbox, gitHub, { jev: jevScoring(0.9, 0.1) })
 
     const again = await runReplay(['public-v1', '--stage', 'evaluate'], sandbox, gitHub)
 

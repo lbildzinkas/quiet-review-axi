@@ -160,6 +160,21 @@ export function missingKeyError(provider: { name: ProviderName; keyEnv: string }
   ])
 }
 
+// Every key and token a run may hold, for its redactor (spec 9.1).
+export function secretsOf(
+  env: Record<string, string | undefined>,
+  userConfig: UserConfig,
+): (string | undefined)[] {
+  return [
+    env.OPENROUTER_API_KEY,
+    env.TYPESAFE_API_KEY,
+    env.GITHUB_TOKEN,
+    env.GH_TOKEN,
+    userConfig.keys?.openrouter,
+    userConfig.keys?.typesafe,
+  ]
+}
+
 // Key values from the user config, for the redactor. Unreadable or invalid files add none.
 export async function configSecrets(context: ConfigContext): Promise<string[]> {
   const text = await readOptional(userConfigPath(context.env)).catch(() => null)

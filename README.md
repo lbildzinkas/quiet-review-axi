@@ -8,7 +8,7 @@ Output is compact [AXI](https://github.com/kunchenguid/axi) TOON for coding agen
 
 ## Status
 
-**v0 in progress.** Scoring works, and the accuracy replay can build, label, score and evaluate its public dataset; only the replay's AI label check is still planned.
+**v0 in progress.** Scoring works, and the accuracy replay can build, label, check, score and evaluate its public dataset.
 
 v0 is decided by an accuracy replay on public pull requests: it checks whether Jev's scores separate comments developers acted on from comments they ignored.
 The project continues only if the replay passes a rule fixed in advance (AUROC ≥ 0.75, and collapsing at least 40% of noise while hiding at most 5% of real issues).
@@ -18,7 +18,7 @@ Until then, the verdict cut-offs are the generic 0.30 / 0.70 band, labelled `unc
 |---|---|
 | `quiet-review-axi score <pr-url>` | Available: scores a pull request's inline review comments (read-only on GitHub) |
 | `quiet-review-axi score --findings <file>` | Available: scores a generic findings file |
-| `quiet-review-axi replay` | Mostly available: `build` and `label` build the public dataset and its automatic labels (read-only on GitHub, no model call), `score` scores it with Jev, and `evaluate` applies the pass rule and, on a pass, writes calibrated cut-offs; the AI label check (`check`) is planned |
+| `quiet-review-axi replay` | Available: `build` and `label` build the public dataset and its automatic labels (read-only on GitHub, no model call); `check` asks a pinned OpenRouter chat model to label a seeded sample (paid, within `--max-cost`), reports agreement and Cohen's kappa, and writes the disagreements to `review.jsonl` for the maintainer; `score` scores the dataset with Jev; and `evaluate` applies the pass rule and, on a pass, writes calibrated cut-offs |
 | `quiet-review-axi report` | Available: prints the accuracy summary of an evaluated replay, with 95% ranges |
 | `quiet-review-axi gate` | Available: checks a reworded question pack against an evaluated replay before it is adopted |
 | `quiet-review-axi smoke` | Available: scores about 20 unmistakable comments by hand after a Jev model update |

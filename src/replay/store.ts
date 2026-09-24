@@ -15,6 +15,9 @@ export interface StageRecord {
   input_hash: string
   detail: string
   completed_at: string
+  // A stage that ran but waits on something outside the tool, such as the maintainer's
+  // review of the label check's disagreements. Absent means done.
+  status?: 'waiting'
   counts?: Record<string, number>
   // Excluded items by reason (label stage).
   excluded_by_reason?: Record<string, number>
@@ -24,6 +27,17 @@ export interface StageRecord {
   provider?: string
   snapshots?: string[]
   cost_usd?: number
+  // Agreement figures and the trust gate (check stage, spec 10.6).
+  label_check?: {
+    model: string
+    // What the sample's answers cost when they were paid for; cache hits count their first cost.
+    cost_usd: number
+    agreement: number | null
+    kappa: number | null
+    overturn_rate: number | null
+    trust: 'ok' | 'inconclusive' | 'pending review'
+    trust_reasons: string[]
+  }
 }
 
 export interface Manifest {
@@ -49,6 +63,9 @@ export function replayFiles(dir: string) {
     gate: (packVersion: string) => join(dir, 'gates', `${packVersion}.json`),
     buildLog: join(dir, 'build-log.jsonl'),
     candidates: join(dir, 'candidates.jsonl'),
+    check: join(dir, 'check.jsonl'),
+    review: join(dir, 'review.jsonl'),
+    finalLabels: join(dir, 'final-labels.jsonl'),
     github: join(dir, 'github'),
   }
 }

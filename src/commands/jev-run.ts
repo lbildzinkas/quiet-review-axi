@@ -1,12 +1,11 @@
 import { randomBytes } from 'node:crypto'
 import type { AppContext } from '../context.js'
 import type { QuestionPack } from '../core/questions.js'
-import { findApiKey, missingKeyError, type UserConfig } from '../infra/config.js'
+import { findApiKey, missingKeyError, secretsOf, type UserConfig } from '../infra/config.js'
 import { cacheDir, callLogPath } from '../infra/paths.js'
 import { createRedactor } from '../infra/redact.js'
 import type { JevJudgeOptions } from '../jev/judge.js'
 import type { JevProvider } from '../jev/provider.js'
-import { secretsOf } from './score.js'
 
 export interface JevRunFlags {
   maxCost: number
@@ -42,6 +41,6 @@ export function jevJudgeOptions(input: {
     sleep: context.sleep,
     random: context.random,
     now: context.now,
-    redact: createRedactor(secretsOf(context, userConfig)),
+    redact: createRedactor(secretsOf(context.env, userConfig)),
   }
 }

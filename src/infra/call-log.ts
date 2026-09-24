@@ -1,7 +1,7 @@
 import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-// One JSON line per Jev call attempt, cache hits included (spec 9.3). Callers pass only
+// One JSON line per Jev or label-model call attempt, cache hits included (spec 9.3). Callers pass only
 // run facts: never state text, question text, comment bodies, keys or tokens.
 export interface CallLogLine {
   ts: string
@@ -9,12 +9,15 @@ export interface CallLogLine {
   command: string
   provider: string
   model: string
-  question_pack: string
+  // Jev calls name their question pack, label-model calls their prompt template.
+  question_pack?: string
+  prompt?: string
   snapshot: string | null
   response_id: string | null
   request_hash: string
   items: number
   input_tokens: number | null
+  output_tokens?: number | null
   cost_usd: number
   cost_source: 'reported' | 'computed' | null
   cached: boolean

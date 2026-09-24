@@ -1,21 +1,35 @@
+import { randomBytes } from 'node:crypto'
 import { relative, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { encode } from '@toon-format/toon'
 import type { AppContext } from '../context.js'
-import { QUESTION_PACK_VERSION, BUILT_IN_PACK } from '../core/questions.js'
-import { BudgetStop, validationError } from '../errors.js'
 import { formatCutoff, type UserConfigCutoffs } from '../core/cutoffs.js'
-import { loadUserConfig, writeUserCutoffs } from '../infra/config.js'
+import { BUILT_IN_PACK, QUESTION_PACK_VERSION } from '../core/questions.js'
+import { BudgetStop, validationError } from '../errors.js'
+import { createBudget, type Budget } from '../infra/budget.js'
+import { canonicalJson } from '../infra/canonical-json.js'
+import {
+  findApiKey,
+  loadUserConfig,
+  missingKeyError,
+  secretsOf,
+  writeUserCutoffs,
+} from '../infra/config.js'
+import { callLogPath, labelCacheDir } from '../infra/paths.js'
+import { createRedactor } from '../infra/redact.js'
 import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
+import { openRouterProvider } from '../jev/openrouter.js'
 import { PROVIDERS } from '../jev/providers.js'
 import { joinBlocks, renderHelp, resumeLimit, roundCost } from '../output/render.js'
 import { MAX_REPOSITORIES, MIN_REPOSITORIES, runBuild, type DrawnItem } from '../replay/build.js'
+import { runCheck } from '../replay/check.js'
 import { defaultConfigPath, loadReplayConfig, type LoadedReplayConfig } from '../replay/config.js'
 import { runDiscovery, type Discovery, type DiscoveredRepository } from '../replay/discover.js'
-import { createReplayFetch } from '../replay/fetch.js'
 import { evaluateReplay, type ReplayResult } from '../replay/evaluate.js'
+import { createReplayFetch } from '../replay/fetch.js'
 import { readFinalLabels } from '../replay/final-labels.js'
-import { labelComment } from '../replay/label.js'
+import { labelComment, type Label } from '../replay/label.js'
+import { LABEL_PROMPT_VERSION } from '../replay/label-check.js'
 import { scoreLabelledItems, type ScoreRow } from '../replay/score.js'
 import type { Rejection } from '../replay/select.js'
 import {
@@ -32,6 +46,7 @@ import {
   writeManifest,
   type Manifest,
   type StageName,
+  type StageRecord,
 } from '../replay/store.js'
 import { jevJudgeOptions } from './jev-run.js'
 import { DEFAULT_MAX_COST, parseNumber, parseProvider } from './score-args.js'
@@ -49,9 +64,6 @@ const REPLAY_FLAGS = {
 // Longer rejection lists (common in discovery) are cut in the output; the build log has all.
 const MAX_REJECTED_ROWS = 20
 
-// Stages this version implements; the rest come with later milestones (spec 12).
-const AVAILABLE_STAGES: StageName[] = ['build', 'label', 'score', 'evaluate']
-
 interface ReplayRun {
   name: string
   dir: string
@@ -60,6 +72,10 @@ interface ReplayRun {
   context: AppContext
   asJson: boolean
   flags: ReplayFlags
+  // Covers every paid call of this invocation: the label model's, then Jev's (spec 9.4).
+  budget: Budget
+  // Set when the check stage stopped at --max-cost in this run.
+  checkStop?: { sampled: number; unlabelled: string[] }
   // Set when `build` searched for candidate repositories instead of building (spec 10.3).
   discovery?: Discovery
   // Set when `score` stopped at --max-cost (spec 9.4).
@@ -80,6 +96,7 @@ export async function replayCommand(args: string[], context: AppContext): Promis
     throw validationError(`Unexpected arguments: ${positionals.slice(1).join(' ')}`)
   const name = positionals[0] ?? 'default'
   const stage = parseStage(values.stage)
+  const maxCost = parseNumber('--max-cost', values['max-cost']) ?? DEFAULT_MAX_COST
   const configPath = resolve(context.cwd, values.config ?? defaultConfigPath(context.cwd, name))
   const loaded = await loadReplayConfig(configPath, name)
   const dir =
@@ -93,22 +110,32 @@ export async function replayCommand(args: string[], context: AppContext): Promis
     asJson: values.json ?? false,
     flags: {
       provider: parseProvider(values.provider),
-      maxCost: parseNumber('--max-cost', values['max-cost']) ?? DEFAULT_MAX_COST,
+      maxCost,
       noCache: values['no-cache'] ?? false,
     },
+    budget: createBudget(maxCost),
   }
   assertPreRegistered(run)
 
-  for (const next of stage === undefined ? AVAILABLE_STAGES : [stage]) {
+  for (const next of stage === undefined ? STAGES : [stage]) {
     if (next === 'build') await buildStage(run)
     if (next === 'label') await labelStage(run)
+    if (next === 'check') await checkStage(run)
     if (next === 'score') await scoreStage(run)
+    // Without --stage, the pass rule waits for the maintainer's review of the label check
+    // (spec 4.6); scoring does not need to.
+    if (
+      stage === undefined &&
+      next === 'evaluate' &&
+      run.manifest.stages.check?.status === 'waiting'
+    )
+      break
     if (next === 'evaluate') await evaluateStage(run)
     // Without --stage, stop at the first stage that could not complete.
     if (stage === undefined && !run.manifest.stages[next]) break
   }
   const output = await renderReplay(run)
-  if (run.stopped) throw new BudgetStop(output)
+  if (run.stopped || run.checkStop) throw new BudgetStop(output)
   return output
 }
 
@@ -224,7 +251,8 @@ async function scoreStage(run: ReplayRun): Promise<void> {
       userConfig,
       provider,
       pack: BUILT_IN_PACK,
-      flags: run.flags,
+      // One --max-cost covers the invocation: scoring gets what the label check left.
+      flags: { ...run.flags, maxCost: Math.max(0, run.flags.maxCost - run.budget.spent()) },
     }),
   })
   if (outcome.isStopped) {
@@ -310,6 +338,64 @@ async function evaluateStage(run: ReplayRun): Promise<void> {
   await writeManifest(run.dir, run.manifest)
 }
 
+async function checkStage(run: ReplayRun): Promise<void> {
+  const files = replayFiles(run.dir)
+  const itemsText = await readOptional(files.items)
+  const labelsText = run.manifest.stages.label ? await readOptional(files.labels) : null
+  if (itemsText === null || labelsText === null)
+    throw validationError(`The label stage of replay ${run.name} has not run yet`, [
+      `Run \`quiet-review-axi replay ${run.name}\` to build and label the dataset first`,
+    ])
+  // The sample and the requests follow from the labels, the items and the prompt template.
+  const inputHash = hashText(
+    canonicalJson({
+      labels: hashText(labelsText),
+      items: run.manifest.stages.label?.input_hash ?? null,
+      prompt: LABEL_PROMPT_VERSION,
+    }),
+  )
+  // The model runs only when the inputs changed; review.jsonl is read back on every run.
+  const previous = run.manifest.stages.check
+  const { context } = run
+  const userConfig = await loadUserConfig(context)
+  const outcome = await runCheck({
+    files,
+    sample: { size: run.loaded.config.label_check.sample_size, seed: run.loaded.config.seed },
+    items: fromJsonl<DrawnItem>(itemsText),
+    labels: new Map(
+      fromJsonl<{ id: string; label: Label }>(labelsText).map((entry) => [entry.id, entry.label]),
+    ),
+    needsModel: previous?.input_hash !== inputHash,
+    model: {
+      model: run.loaded.config.label_check.model,
+      runId: `r-${randomBytes(4).toString('hex')}`,
+      callLogPath: callLogPath(context.env),
+      redact: createRedactor(secretsOf(context.env, userConfig)),
+      progress: (line: string) => context.stderr.write(`${line}\n`),
+      budget: run.budget,
+      useCache: !run.flags.noCache,
+      cacheDir: labelCacheDir(context.env),
+      apiKey: () => {
+        const found = findApiKey(openRouterProvider, context.env, userConfig)
+        if (!found) throw missingKeyError(openRouterProvider)
+        return found.key
+      },
+      fetch: context.fetch,
+      sleep: context.sleep,
+      random: context.random,
+      now: context.now,
+    },
+  })
+  if (outcome.kind === 'stopped') {
+    run.checkStop = outcome
+    return
+  }
+  const { record } = outcome
+  if (previous?.input_hash === inputHash && sameOutcome(previous, record)) return
+  run.manifest.stages.check = { input_hash: inputHash, ...record }
+  await writeManifest(run.dir, run.manifest)
+}
+
 function evaluateDetail(result: ReplayResult): string {
   if (result.verdict === 'refused') return `refused: ${result.refusal}`
   const auroc = result.auroc === null ? 'n/a' : String(Number(result.auroc.toFixed(3)))
@@ -350,8 +436,21 @@ function describeUserCutoffs(cutoffs: UserConfigCutoffs, withProvenance = true):
   return `${parts.join(' ')} (${provenance})`
 }
 
+// Whether a re-run reached the same result, so the stage record stays as it was.
+function sameOutcome(previous: StageRecord, next: Omit<StageRecord, 'input_hash'>): boolean {
+  const outcome = (record: Partial<StageRecord>) =>
+    canonicalJson({ ...record, input_hash: null, completed_at: null })
+  return outcome(previous) === outcome(next)
+}
+
 async function renderReplay(run: ReplayRun): Promise<string> {
   const stages = STAGES.map((stage) => {
+    if (stage === 'check' && run.checkStop)
+      return {
+        stage,
+        status: 'stopped',
+        detail: `${run.checkStop.sampled - run.checkStop.unlabelled.length} of ${run.checkStop.sampled} labelled, stopped at --max-cost ${run.flags.maxCost}`,
+      }
     const record = run.manifest.stages[stage]
     if (stage === 'score' && run.stopped)
       return {
@@ -359,15 +458,13 @@ async function renderReplay(run: ReplayRun): Promise<string> {
         status: 'stopped',
         detail: `${run.stopped.scored} of ${run.stopped.total} items scored; --max-cost ${run.flags.maxCost} reached`,
       }
-    if (record) return { stage, status: 'done', detail: record.detail }
+    if (record) return { stage, status: record.status ?? 'done', detail: record.detail }
     if (stage === 'build' && run.discovery)
       return {
         stage,
         status: 'waiting',
         detail: `${run.discovery.candidates.length} of ${run.discovery.candidates.length + run.discovery.rejected.length} candidates qualify; list ${MIN_REPOSITORIES}-${MAX_REPOSITORIES} in the config`,
       }
-    if (!AVAILABLE_STAGES.includes(stage))
-      return { stage, status: 'unavailable', detail: 'not in this version yet' }
     return { stage, status: 'pending', detail: '' }
   })
   const view: Record<string, unknown> = {
@@ -381,7 +478,23 @@ async function renderReplay(run: ReplayRun): Promise<string> {
     view.cutoffs_written = run.cutoffsWritten.written
     if (run.cutoffsWritten.replaced !== null) view.cutoffs_replaced = run.cutoffsWritten.replaced
   }
-  const warnings = run.manifest.stages.build?.warnings ?? []
+  if (run.checkStop) {
+    view.stopped = 'max-cost'
+    view.code = 'BUDGET_STOP'
+    view.unlabelled = run.checkStop.unlabelled.length
+    view.run_cost_usd = roundCost(run.budget.spent())
+  }
+  const labelCheck = run.manifest.stages.check?.label_check
+  if (labelCheck) {
+    view.label_model = labelCheck.model
+    view.label_check_cost_usd = roundCost(labelCheck.cost_usd)
+    view.trust = labelCheck.trust
+    if (labelCheck.trust_reasons.length > 0) view.trust_reasons = labelCheck.trust_reasons
+  }
+  const warnings = [
+    ...(run.manifest.stages.build?.warnings ?? []),
+    ...(run.manifest.stages.check?.warnings ?? []),
+  ]
   if (warnings.length > 0) view.warnings = warnings
   const excluded = Object.entries(run.manifest.stages.label?.excluded_by_reason ?? {})
     .sort((a, b) => b[1] - a[1] || compareText(a[0], b[0]))
@@ -426,6 +539,10 @@ function candidateRow(run: ReplayRun) {
 
 function helpLines(run: ReplayRun): string[] {
   const config = relative(run.context.cwd, run.loaded.path)
+  if (run.checkStop)
+    return [
+      `Run \`quiet-review-axi replay ${run.name} --stage check --max-cost ${resumeLimit(run.flags.maxCost)}\` to label the rest; labels already paid for come from the cache`,
+    ]
   if (run.discovery)
     return [
       `Run \`quiet-review-axi replay ${run.name}\` to build the dataset after listing ${MIN_REPOSITORIES}-${MAX_REPOSITORIES} qualifying repositories that cover at least 3 bots in \`repositories\` in ${config}, and committing it`,
@@ -436,6 +553,14 @@ function helpLines(run: ReplayRun): string[] {
     return [`Run \`quiet-review-axi replay ${run.name} --stage label\` to label the dataset`]
   if (run.manifest.stages.evaluate)
     return [`Run \`quiet-review-axi report ${run.name}\` to see the metrics with their 95% ranges`]
+  if (run.manifest.stages.check?.status === 'waiting')
+    return [
+      `Run \`quiet-review-axi replay ${run.name}\` after setting \`label\` to real, noise or excluded on each line of ${relative(run.context.cwd, replayFiles(run.dir).review)}, to record the reviewed labels and evaluate`,
+    ]
+  if (!run.manifest.stages.check)
+    return [
+      `Run \`quiet-review-axi replay ${run.name} --stage check --max-cost <usd>\` to check a sample of the labels with the label model (paid, needs OPENROUTER_API_KEY)`,
+    ]
   if (!run.manifest.stages.score)
     return [
       `Run \`quiet-review-axi replay ${run.name}\` to score the labelled items with Jev (paid; --max-cost limits the spend)`,
@@ -449,12 +574,7 @@ function parseStage(value: string | undefined): StageName | undefined {
   if (value === undefined) return undefined
   if (!(STAGES as readonly string[]).includes(value))
     throw validationError(`--stage must be one of ${STAGES.join(', ')}, not ${value}`)
-  const stage = value as StageName
-  if (!AVAILABLE_STAGES.includes(stage))
-    throw validationError(`The ${stage} stage is not available in this version yet`, [
-      `Run \`quiet-review-axi replay <name>\` to run the ${AVAILABLE_STAGES.join(' and ')} stages`,
-    ])
-  return stage
+  return value as StageName
 }
 
 function parseFlags(args: string[]) {
@@ -471,13 +591,14 @@ export const REPLAY_HELP = joinBlocks(
   encode({
     command: 'replay',
     usage:
-      'quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [--config <file>] [--dir <path>]',
+      'quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [--config <file>] [--dir <path>] [--provider <openrouter|typesafe>] [--max-cost <usd>] [--no-cache] [--json]',
     description:
-      'Builds the public replay dataset, labels it, scores it with Jev and evaluates the pre-registered pass rule, in resumable stages stored in a replay directory',
+      'Builds the public replay dataset, labels it, checks a sample of the labels with an AI model and the maintainer, scores it with Jev and evaluates the pre-registered pass rule, in resumable stages stored in a replay directory',
     stages: {
       build: 'Select repositories, bots and comments from GitHub per the replay config (read only)',
       label: 'Label every drawn comment real, noise or excluded from the recorded evidence',
-      check: 'Not available in this version yet',
+      check:
+        'Ask the label model (paid, OpenRouter key) about a seeded sample, report agreement, and write the disagreements to review.jsonl for the maintainer',
       score: 'Score every labelled comment with Jev, one request per pull request (paid)',
       evaluate:
         'Compute AUROC, the threshold sweep and 95% ranges, apply the pass rule, and on a pass write calibrated cut-offs to the user config',
@@ -489,7 +610,7 @@ export const REPLAY_HELP = joinBlocks(
       '--dir <path>': 'Replay directory (default: .quiet-review/replays/<name>)',
       '--provider <openrouter|typesafe>': 'Jev backend (default: openrouter, or the user config)',
       '--max-cost <usd>':
-        'Stop before a paid call would pass this run total (default: 0.50; 0 = cache only)',
+        'Stop before a paid call would pass this run total, label model and Jev together (default: 0.50; 0 = cache only)',
       '--no-cache': 'Skip cache reads and make fresh calls',
       '--json': 'Emit one JSON document',
     },
@@ -498,6 +619,7 @@ export const REPLAY_HELP = joinBlocks(
   }),
   renderHelp([
     'Run `quiet-review-axi replay public-v1` to run every stage of the replay configured in replay/public-v1.config.json',
+    'Run `quiet-review-axi replay public-v1 --stage check` after filling review.jsonl, to record the reviewed labels',
     'Run `quiet-review-axi report public-v1` to see its result',
   ]),
 )

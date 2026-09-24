@@ -26,7 +26,7 @@ describe('replay score stage', () => {
     const { sandbox, gitHub } = setupReplay()
     const jev = createFakeJev()
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, jev)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toMatch(/score,done,"4 items, 4 calls, \$0\.\d+"/)
@@ -63,7 +63,7 @@ describe('replay score stage', () => {
     })
     const jev = createFakeJev()
 
-    await runReplay(['public-v1'], sandbox, gitHub, jev)
+    await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     expect(jev.calls).toHaveLength(10)
     for (const call of jev.calls) {
@@ -90,7 +90,7 @@ describe('replay score stage', () => {
     })
     const jev = createFakeJev()
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, jev)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     expect(result.stdout).toContain('label,done,"real 3, noise 4, excluded 3"')
     expect(result.stdout).toMatch(/score,done,"7 items, 7 calls/)
@@ -111,6 +111,7 @@ describe('replay score stage', () => {
     const { sandbox, gitHub } = setupReplay()
     await runReplay(['public-v1', '--stage', 'build'], sandbox, gitHub)
     await runReplay(['public-v1', '--stage', 'label'], sandbox, gitHub)
+    await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
 
     const scored = await runReplay(['public-v1', '--stage', 'score'], sandbox, gitHub)
 
@@ -126,9 +127,13 @@ describe('replay score stage', () => {
   it('stops at --max-cost with exit 3, and a re-run resumes paying only for the rest', async () => {
     const { sandbox, gitHub } = setupReplay()
     const jev = createFakeJev()
+    // The label check runs before scoring and would stop first at --max-cost 0.
+    await runReplay(['public-v1', '--stage', 'build'], sandbox, gitHub)
+    await runReplay(['public-v1', '--stage', 'label'], sandbox, gitHub)
+    await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
 
-    const stopped = await runReplay(['public-v1', '--max-cost', '0'], sandbox, gitHub, jev)
-    const resumed = await runReplay(['public-v1'], sandbox, gitHub, jev)
+    const stopped = await runReplay(['public-v1', '--max-cost', '0'], sandbox, gitHub, { jev })
+    const resumed = await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     expect(stopped.exitCode).toBe(3)
     expect(stopped.stdout).toContain('score,stopped,0 of 4 items scored; --max-cost 0 reached')

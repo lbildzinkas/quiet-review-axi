@@ -22,7 +22,7 @@ function writeCandidatePack(sandbox: Sandbox, version = 'v0.2'): string {
 
 async function evaluatedReplay() {
   const setup = scoredReplay()
-  await runReplay(['public-v1'], setup.sandbox, setup.gitHub, setup.jev)
+  await runReplay(['public-v1'], setup.sandbox, setup.gitHub, { jev: setup.jev })
   return setup
 }
 
@@ -205,7 +205,7 @@ describe('question-pack regression gate baseline', () => {
     const mixed = jevByPart(WORTH, {
       snapshot: (call) => (call <= 5 ? 'typesafe/jev-1.13-20260917' : 'typesafe/jev-1.13-20261001'),
     })
-    await runReplay(['public-v1'], sandbox, gitHub, mixed)
+    await runReplay(['public-v1'], sandbox, gitHub, { jev: mixed })
     const jev = jevByPart(WORTH)
 
     const refused = await gate(['public-v1', '--pack', writeCandidatePack(sandbox)], sandbox, jev)

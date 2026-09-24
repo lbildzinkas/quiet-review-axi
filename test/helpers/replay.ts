@@ -2,13 +2,22 @@ import { readFileSync } from 'node:fs'
 import { buildWorld, config, type RepositorySpec } from '../fixtures/github/replay-world.js'
 import { createFakeGitHubReplay } from './fake-github-replay.js'
 import { createFakeJev } from './fake-jev.js'
-import { combineHandlers, createSandbox, runCli, type Sandbox } from './run-cli.js'
+import { createFakeLabelModel } from './fake-label-model.js'
+import { combineHandlers, createSandbox, runCli, type RunOptions, type Sandbox } from './run-cli.js'
 
 export const TOKEN = { GITHUB_TOKEN: 'ghp_secret_token' }
+// One OpenRouter key serves both Jev (score stage) and the label model (check stage).
 export const JEV_KEY = { OPENROUTER_API_KEY: 'sk-or-replay-secret' }
+export const LABEL_KEY = JEV_KEY
 
 export type FakeGitHubReplay = ReturnType<typeof createFakeGitHubReplay>
 export type FakeJev = ReturnType<typeof createFakeJev>
+export type FakeLabelModel = ReturnType<typeof createFakeLabelModel>
+
+export interface ReplayFakes extends Omit<RunOptions, 'sandbox' | 'fetch'> {
+  jev?: FakeJev
+  labelModel?: FakeLabelModel
+}
 
 export function readJsonl(path: string): Record<string, unknown>[] {
   return readFileSync(path, 'utf8')
@@ -31,21 +40,23 @@ export function setupReplay(
   return { sandbox, gitHub }
 }
 
-// Runs `replay` with a GitHub token and a Jev key. GitHub requests go to the fake GitHub;
-// Jev requests go to `jev` (by default a fake that answers 0.5 for every item).
+// Runs `replay` with a GitHub token and an OpenRouter key. The network is the fake GitHub,
+// a fake Jev (by default one that answers 0.5 for every item) and a fake label model (by
+// default one that agrees with the main automatic rule); both fakes sit behind openrouter.ai.
 export function runReplay(
   argv: string[],
   sandbox: Sandbox,
   gitHub?: FakeGitHubReplay,
-  jev: FakeJev = createFakeJev(),
-  now?: Date,
+  fakes: ReplayFakes = {},
 ) {
+  const { jev = createFakeJev(), labelModel = createFakeLabelModel(), env, ...options } = fakes
   return runCli(['replay', ...argv], {
+    ...options,
     sandbox,
-    now,
-    env: { ...TOKEN, ...JEV_KEY },
+    env: { ...TOKEN, ...JEV_KEY, ...env },
     fetch: combineHandlers(
       ...(gitHub ? [{ matches: gitHub.matches, handle: gitHub.handle }] : []),
+      labelModel,
       { matches: (url) => url.startsWith('https://openrouter.ai/'), handle: jev.handle },
     ),
   })

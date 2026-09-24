@@ -22,7 +22,8 @@ const TOP_LEVEL_HELP = `${encode({
   usage: 'quiet-review-axi <command> [args] [flags]',
   commands: {
     score: "Score a pull request's review comments, or a findings file, with Jev",
-    replay: 'Build, label, score and evaluate the public replay dataset (accuracy experiment)',
+    replay:
+      'Build, label, check, score and evaluate the public replay dataset (accuracy experiment)',
     report: 'Print the accuracy summary of an evaluated replay, with 95% ranges',
     gate: 'Check a new question pack against an evaluated replay (wording regression gate)',
     smoke: 'Score the built-in smoke set of unmistakable comments by hand after a Jev model update',

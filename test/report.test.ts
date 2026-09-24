@@ -12,7 +12,7 @@ function report(argv: string[], sandbox: Sandbox) {
 describe('report', () => {
   it('prints the accuracy summary with 95% ranges, and calls nothing', async () => {
     const { sandbox, gitHub, jev } = scoredReplay()
-    await runReplay(['public-v1'], sandbox, gitHub, jev)
+    await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     const result = await report(['public-v1'], sandbox)
 
@@ -40,6 +40,9 @@ describe('report', () => {
     expect(result.stdout).toContain(
       'note: "best_threshold is chosen on the same data it is measured on, so noise_collapsed and real_hidden are optimistic"',
     )
+    expect(result.stdout).toContain(
+      'label_check: "10 sampled, AI agreement 1 (kappa 1), 0 reviewed, 0 automatic labels corrected"',
+    )
     expect(result.stdout).toMatch(
       /\ncutoffs_written: collapse<0\.31 keep>=0\.70 -> \S+config\.json\n/,
     )
@@ -51,7 +54,7 @@ describe('report', () => {
 
   it('gives byte-identical output on every run', async () => {
     const { sandbox, gitHub, jev } = scoredReplay()
-    await runReplay(['public-v1'], sandbox, gitHub, jev)
+    await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     const first = await report(['public-v1'], sandbox)
     const second = await report(['public-v1'], sandbox)
@@ -61,7 +64,7 @@ describe('report', () => {
 
   it('adds the sweep and the breakdown tables with --json', async () => {
     const { sandbox, gitHub, jev } = scoredReplay()
-    await runReplay(['public-v1'], sandbox, gitHub, jev)
+    await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     const result = await report(['public-v1', '--json'], sandbox)
 
@@ -87,24 +90,18 @@ describe('report', () => {
 
   it('reports the most recently evaluated replay when no name is given', async () => {
     const older = scoredReplay('public-v1')
-    await runReplay(
-      ['public-v1'],
-      older.sandbox,
-      older.gitHub,
-      older.jev,
-      new Date('2026-09-20T10:00:00Z'),
-    )
+    await runReplay(['public-v1'], older.sandbox, older.gitHub, {
+      jev: older.jev,
+      now: new Date('2026-09-20T10:00:00Z'),
+    })
     older.sandbox.write(
       'work/replay/public-v2.config.json',
       JSON.stringify(config({ name: 'public-v2', target_items: 100 })),
     )
-    await runReplay(
-      ['public-v2'],
-      older.sandbox,
-      older.gitHub,
-      older.jev,
-      new Date('2026-09-22T10:00:00Z'),
-    )
+    await runReplay(['public-v2'], older.sandbox, older.gitHub, {
+      jev: older.jev,
+      now: new Date('2026-09-22T10:00:00Z'),
+    })
 
     const result = await report([], older.sandbox)
 
@@ -127,7 +124,7 @@ describe('report', () => {
     const jev = createFakeJev({
       snapshot: (call) => (call <= 5 ? 'typesafe/jev-1.13-20260917' : 'typesafe/jev-1.13-20261001'),
     })
-    await runReplay(['public-v1'], sandbox, gitHub, jev)
+    await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     const result = await report(['public-v1'], sandbox)
 
@@ -145,7 +142,7 @@ describe('report', () => {
 describe('home view', () => {
   it('shows the most recently evaluated replay and points to report', async () => {
     const { sandbox, gitHub, jev } = scoredReplay()
-    await runReplay(['public-v1'], sandbox, gitHub, jev)
+    await runReplay(['public-v1'], sandbox, gitHub, { jev })
 
     const result = await runCli([], { sandbox })
 
