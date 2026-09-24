@@ -193,6 +193,30 @@ describe('replay label check (spec 10.6)', () => {
     )
   })
 
+  it('refuses a review line that is not a JSON object', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    appendFileSync(replayPath(sandbox, 'review.jsonl'), 'null\n')
+
+    const result = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toContain('review.jsonl line 3 is not a JSON object')
+  })
+
+  it('asks again, from the cache, when check.jsonl was deleted', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    const first = await runReplay(['public-v1'], sandbox, gitHub)
+    rmSync(replayPath(sandbox, 'check.jsonl'))
+    const labelModel = createFakeLabelModel()
+
+    const again = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+
+    expect(again.stdout).toBe(first.stdout)
+    expect(labelModel.chatCalls).toHaveLength(0)
+    expect(readJsonl(replayPath(sandbox, 'check.jsonl'))).toHaveLength(4)
+  })
+
   it('refuses a review file that lost the line of an item awaiting review', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
     await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))

@@ -49,10 +49,10 @@ export type CheckOutcome =
   | { kind: 'stopped'; sampled: number; unlabelled: string[] }
 
 export async function runCheck(options: CheckOptions): Promise<CheckOutcome> {
-  const labelled = options.needsModel ? await labelSample(options) : null
-  if (labelled && 'unlabelled' in labelled)
-    return { kind: 'stopped', sampled: labelled.sampled, unlabelled: labelled.unlabelled }
-  const rows = labelled ?? (await readRows(options.files))
+  const stored = options.needsModel ? null : await readRows(options.files)
+  const rows = stored ?? (await labelSample(options))
+  if ('unlabelled' in rows)
+    return { kind: 'stopped', sampled: rows.sampled, unlabelled: rows.unlabelled }
   return { kind: 'record', record: await reviewOutcome(options, rows) }
 }
 
@@ -138,7 +138,9 @@ function trustGate(facts: {
 }): { verdict: TrustVerdict; reasons: string[] } {
   const reasons: string[] = []
   if (facts.agreement === null)
-    reasons.push('the AI answered unsure on every sampled item, so agreement cannot be measured')
+    reasons.push(
+      'no sampled item got a real or noise label from the AI, so agreement cannot be measured',
+    )
   else if (facts.agreement < MIN_AGREEMENT)
     reasons.push(`AI agreement ${formatRate(facts.agreement)} is below ${MIN_AGREEMENT}`)
   if (facts.overturnRate !== null && facts.overturnRate > MAX_OVERTURN_RATE)
@@ -186,12 +188,13 @@ async function readReview(
   text.split('\n').forEach((raw, index) => {
     if (raw.trim() === '') return
     const where = `${REVIEW_FILE} line ${index + 1}`
-    let line: { id?: unknown; label?: unknown }
+    let line: unknown
     try {
-      line = JSON.parse(raw) as { id?: unknown; label?: unknown }
+      line = JSON.parse(raw)
     } catch {
       throw validationError(`${where} is not valid JSON`, REVIEW_HELP)
     }
+    if (!isObject(line)) throw validationError(`${where} is not a JSON object`, REVIEW_HELP)
     if (typeof line.id !== 'string' || !expected.has(line.id))
       throw validationError(`${where} names an item that is not awaiting review`, REVIEW_HELP)
     if (seen.has(line.id)) throw validationError(`${where} repeats ${line.id}`, REVIEW_HELP)
@@ -279,8 +282,8 @@ async function keptReviewLabels(files: CheckFiles): Promise<Map<string, Label>> 
   const kept = new Map<string, Label>()
   for (const raw of ((await readOptional(files.review)) ?? '').split('\n')) {
     try {
-      const line = JSON.parse(raw) as { id?: unknown; label?: unknown }
-      if (typeof line.id === 'string' && REVIEW_LABELS.has(line.label))
+      const line: unknown = JSON.parse(raw)
+      if (isObject(line) && typeof line.id === 'string' && REVIEW_LABELS.has(line.label))
         kept.set(line.id, line.label as Label)
     } catch {
       // Blank or broken lines carry no label to keep.
@@ -289,8 +292,14 @@ async function keptReviewLabels(files: CheckFiles): Promise<Map<string, Label>> 
   return kept
 }
 
-async function readRows(files: CheckFiles): Promise<CheckRow[]> {
-  return fromJsonl<CheckRow>((await readOptional(files.check)) ?? '')
+// The stored AI labels, or null when check.jsonl is gone and the sample must be relabelled.
+async function readRows(files: CheckFiles): Promise<CheckRow[] | null> {
+  const text = await readOptional(files.check)
+  return text === null ? null : fromJsonl<CheckRow>(text)
+}
+
+function isObject(value: unknown): value is { id?: unknown; label?: unknown } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function formatRate(value: number | null): string {
