@@ -9,7 +9,8 @@ export type Question = Record<string, unknown> & { type: 'noul' | 'choice' | 'sc
 
 const text = z.string().min(1)
 const questionPackSchema = z.object({
-  version: text,
+  // Also names files (the gate's record), so it is a plain token such as v0.2.
+  version: z.string().regex(/^[\w.-]+$/, 'must be letters, digits, dots, dashes or underscores'),
   placeholders: z.record(z.string(), z.string()).optional(),
   questions: z
     .object({

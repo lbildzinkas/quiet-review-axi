@@ -1,6 +1,6 @@
 # Quiet Review v0 specification
 
-Status: **v0 in progress.** `score <pr-url>` and `score --findings` are implemented (M1, the scoring core, M5), and so are the replay's `build` and `label` stages (M2). The `check`, `score` and `evaluate` stages and `report` are pending.
+Status: **v0 in progress.** `score <pr-url>` and `score --findings` are implemented (M1, the scoring core, M5), and so are the replay's `build` and `label` stages (M2), its `score` and `evaluate` stages, `report`, the question-pack `gate` and the `smoke` set (M4). The replay's `check` stage (M3) is pending.
 Date: 2026-09-23.
 
 Quiet Review scores AI code-review comments so that low-value ones can be collapsed and only real issues surface.
@@ -147,6 +147,7 @@ The shape follows the `axi-sdk-js` conventions used by `gh-axi` and `lavish-axi`
 - Every successful response ends with a `help[n]:` list of next-step hints, each phrased ``Run `...` to ...``.
 - Errors are rendered as `error:`, `code:` and optional `help[n]:`.
 - Built-in `--help` and `-v/--version` come from the SDK. The SDK's npm self-update is shadowed while v0 is not on npm (R15): `update` prints the repository install command and installs nothing, so it can never fetch an unrelated npm package of the same name.
+- Besides the commands of R12, `gate` (4.8) and `smoke` (4.9) carry the question-pack checks of 5.4.5. `replay`, `report`, `gate` and `smoke` offer compact TOON and `--json`; `--human` is for `score`.
 
 ### 4.1 Global flags
 
@@ -352,6 +353,7 @@ Builds the replay dataset and runs the accuracy test of section 10. The replay i
 
 ```
 quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [--config <file>] [--dir <path>]
+                        [--provider <openrouter|typesafe>] [--max-cost <usd>] [--no-cache] [--json]
 ```
 
 | Stage | What it does | Paid? |
@@ -364,9 +366,13 @@ quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [-
 
 - `<name>` defaults to `default`. The replay directory defaults to `./.quiet-review/replays/<name>/` and is created on first use; `--dir` overrides it. `--config` defaults to `replay/<name>.config.json`, and the config's `name` must match `<name>`.
 - With no `--stage`, `replay` runs every stage that is not complete, in order, and stops at the first one that cannot complete. It stops before `evaluate` while the maintainer's disagreement review (10.6) is unfinished, and says so in `help`.
-- Each stage records its inputs' hash in `manifest.json`: `build` the config hash, `label` the hash of `items.jsonl`. Re-running a completed stage with unchanged inputs is a no-op. Changing the config after `build` is refused (exit 2); a new replay name is needed. This protects the pre-registration.
+- Each stage records its inputs' hash in `manifest.json`: `build` the config hash, `label` the hash of `items.jsonl`, `score` the hashes of `items.jsonl` and the final labels, `evaluate` those plus `scores.jsonl` and the config hash. Re-running a completed stage with unchanged inputs is a no-op. Changing the config after `build` is refused (exit 2); a new replay name is needed. This protects the pre-registration.
 - `--stage label` before `build` has completed is `VALIDATION_ERROR` (exit 2).
-- Stages not yet implemented are listed with status `unavailable`; asking for one with `--stage` is `VALIDATION_ERROR`. Until M3 and M4, that is `check`, `score` and `evaluate`.
+- Stages not yet implemented are listed with status `unavailable`; asking for one with `--stage` is `VALIDATION_ERROR`. Until M3, that is `check`.
+- `--stage score` before `label`, and `--stage evaluate` before `score`, are `VALIDATION_ERROR` (exit 2).
+- **`score`** reads the final labels (10.6; until M3, the automatic labels) and scores the `real` and `noise` items, never the excluded ones. Each pull request's drawn comments form one batch, keyed `c1`, `c2`, ... in creation order (then comment id), and go through the shared request builder of 5.2 with the PR's repository and title as the `pr` header, so the replay measures the requests `score` sends. Only the drawn comments of a PR are in its request, not every comment on it. All requests of the invocation share one `--max-cost` budget, the request cache and the cost log (section 9); the key is needed only for a paid call, so a missing key is `MISSING_KEY` (exit 4) after the free stages have completed and been recorded. The stage records the question pack version, provider, returned snapshots, calls and cost.
+- **Budget stop.** When `score` reaches `--max-cost`, nothing partial is written: the stage row shows `stopped` with how many items were scored, the help line gives the command that resumes, and the run exits 3. Everything paid for is cached, so the resumed run pays only for the rest.
+- **The question pack is pre-registered with the replay.** Once `score` has completed with one pack version, a later build carrying another pack version refuses to re-score that replay (exit 2), pointing to `gate` (4.8) and to a new replay name (10.8).
 - Progress lines go to stderr; the result goes to stdout. `--json` emits the same fields as one JSON document.
 - The replay directory holds:
 
@@ -378,9 +384,14 @@ quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [-
   | `build-log.jsonl` | `build` | every rejected repository or bot, with its reason (10.3) |
   | `items.jsonl` | `build` | every drawn comment, labelled or excluded, with its label evidence (10.5) |
   | `labels.jsonl` | `label` | per item: `label`, exclusion `reason`, and the `changed`, `resolved`, `agree`, `disagree` signals |
+  | `scores.jsonl` | `score` | per scored item: `id`, `snapshot`, `worth`, `category`, `severity`, `dup_of` (no comment text) |
+  | `result.json` | `evaluate` | the metrics, ranges, sweep, breakdowns and pass-rule outcome of 10.7-10.8 (aggregates only) |
+  | `runs.jsonl` | `evaluate`, `gate` | one line per evaluation or gate run: kind, question pack, provider, snapshots and results (aggregates only) |
+  | `gates/<pack>.json` | `gate` | the last gate run for that candidate pack version (4.8) |
 
 - The output adds `excluded[n]{reason,count}` once `label` has run, `rejected[n]{kind,candidate,reason}` for rejected repositories and bots (the first 20, with `rejected_total` and a help line pointing to `build-log.jsonl` when there are more), and a `warnings` line when the dataset covers fewer than 3 bots or a repository count outside 5-8 (R9).
-- `--max-cost` applies to the whole invocation, across the `check` and `score` stages.
+- `--max-cost` applies to the whole invocation, across the `check` and `score` stages. `--provider` and `--no-cache` apply to `score` as in 4.1.
+- When `evaluate` writes calibrated cut-offs, the output adds `cutoffs_written` (the values and the file), and `cutoffs_replaced` when earlier values were replaced (6.2). Once `evaluate` has run, the help line points to `report`.
 
 Example:
 
@@ -411,6 +422,7 @@ $ quiet-review-axi report public-v1
 replay: public-v1
 verdict: pass
 model: typesafe/jev-1.13-20260917
+question_pack: v0.1
 items: 295
 real: 131
 noise: 164
@@ -424,6 +436,7 @@ real_hidden_ci95: 0.015-0.084
 keep_precision: 0.83
 keep_precision_ci95: 0.74-0.90
 pass_rule: "auroc >= 0.75 and exists t: noise_collapsed >= 0.40 and real_hidden <= 0.05 (judged on measured values)"
+note: "best_threshold is chosen on the same data it is measured on, so noise_collapsed and real_hidden are optimistic"
 label_check: "60 sampled, AI agreement 0.87 (kappa 0.73), 8 reviewed, 1 automatic label corrected"
 cutoffs_written: "collapse<0.27 keep>=0.70 -> ~/.config/quiet-review-axi/config.json"
 by_bot[4]{bot,items,real,auroc}:
@@ -439,6 +452,40 @@ help[1]:
 All numbers above are illustrative.
 Every rate in `report` is printed with its 95% range (D11).
 `--json` adds the full threshold sweep, per-repo table, calibration table, category and severity breakdowns, excluded counts by reason, and the snapshot list.
+
+- `report` reads the replay's `result.json`; `--dir <path>` reads another replay directory. With no name it picks the most recently evaluated replay under `.quiet-review/replays/`. A replay not yet evaluated is `VALIDATION_ERROR` (exit 2) with a help line naming the `replay` command.
+- Rates and AUROC print to three decimals, ranges as `low-high`. `best_threshold` is `t*` (10.7).
+- When the pass rule was refused (10.7), the output adds `refusal` and a `by_snapshot` table, and `model` lists every snapshot.
+- Until the label check (M3) exists, `label_check` says it was not run.
+- The home view (4.3) shows `last_replay` from the same result.
+
+### 4.8 `gate` (question-pack regression gate)
+
+```
+quiet-review-axi gate [<replay>] [--pack <file>] [--dir <path>] [--provider <openrouter|typesafe>] [--max-cost <usd>] [--no-cache] [--json]
+```
+
+Checks a changed question pack (5.4.5) against an evaluated replay before the pack is adopted.
+
+- The candidate is `--pack <file>`, a pack file with the structure of `src/core/question-pack.json`, or, by default, the pack built into this version. Its structure is validated; an invalid pack is `VALIDATION_ERROR` (exit 2). A candidate whose `version` equals the version the replay was scored with is refused (exit 2): a changed pack needs a new version.
+- It re-scores the replay's `real` and `noise` items with the candidate pack, through the same batching, cache, budget and cost log as the `score` stage (default provider: the one the replay was scored with). A budget stop prints `gate: stopped`, how many items were scored, and the resume command, and exits 3.
+- **Rule.** The pack is `accepted` only when both hold: AUROC drops by at most **0.02** from the replay's measured AUROC, and the share of real items scoring below the replay's `best_threshold` (the calibrated collapse cut-off) is at most the pass rule's `max_real_hidden` (0.05). Otherwise it is `rejected`, with one `reasons` line per failed check. Candidate scores from more than one snapshot are `refused`.
+- When the candidate was scored on another snapshot than the replay, a `warning` says a model change is mixed with the wording change.
+- Output: `gate`, `replay`, `question_pack`, `baseline_pack`, `model`, `baseline_model`, `auroc`, `baseline_auroc`, `auroc_drop`, `threshold`, `real_hidden`, `rule`, then `reasons` and `warning` when present, `items`, `calls`, `cost_usd`, and help. A rejected pack is data: the exit code stays 0.
+- Every gate run appends a line to the replay's `runs.jsonl` (pack version, baseline pack, provider, snapshots, decision and results) and writes `gates/<pack>.json`. It never changes the replay's `result.json` or the cut-offs: the gate is separate from the pre-registered pass rule.
+- An accepted pack is adopted by making it the built-in `src/core/question-pack.json` and recording the gate run in `replay/<name>.result.md`.
+
+### 4.9 `smoke` (on-demand smoke set)
+
+```
+quiet-review-axi smoke [--provider <openrouter|typesafe>] [--max-cost <usd>] [--no-cache] [--json]
+```
+
+Scores the built-in smoke set, `src/smoke/smoke-set.json`: 20 unmistakable review comments, 10 real problems and 10 noise, each with its code hunk.
+
+- Each example goes in its own request with the built-in pack, so examples cannot influence each other. The run uses the cache, budget and cost log of section 9 (about 22k input tokens, about $0.001).
+- Loose bounds: a real example must score at least **0.7**, a noise example below **0.3**. The output is `smoke: pass` or `smoke: fail` with an `outside_bounds[n]{id,expected,worth,bound}` table; `--json` lists every example. Examples outside their bounds are data: the exit code stays 0.
+- It needs a real key and is run by hand after a Jev model update (with `--no-cache`) or before a release. It never runs in automated checks (5.4.5).
 
 ---
 
@@ -604,9 +651,9 @@ Question wording and thresholds are empirical: whether a wording is better can o
 1. **One versioned data file.** The instructions, options and Score levels of 5.4.1-5.4.4 live in `src/core/question-pack.json`, with a `version` field. The tool loads it; `{item}` and `{candidate}` placeholders are filled with item keys by code, never with comment text. A wording change is a pack edit with a new version, not a code change.
 2. **Recorded everywhere.** The pack version is part of every request body's cache key (through the wording itself), and is recorded in `--json` output (`run.question_pack`) and in every cost-log line (9.3).
 3. **Unit tests cover structure only.** Tests check the pack's shape (four templates, the 11 categories, five Score levels, placeholders) and the exact request it produces for fixed items. They never assert what Jev answers.
-4. **The replay is the wording regression gate.** A new pack version is accepted only when the cached public-data replay (section 10), re-scored with it, drops AUROC by no more than about 0.02 and still hides at most 5% of real issues at the chosen threshold. Each gate run is logged with the pack version, the model snapshot and the results. This gate is separate from the pre-registered pass rule (10.8), which it does not change.
-5. **An on-demand smoke set.** About 20 unmistakable examples with loose bounds (for example, a clear bug scores above 0.7 and a pure summary below 0.3), run by hand with a real key after a Jev model update.
-6. **Nothing that calls Jev runs in automated pull-request checks.** Such runs need a key and cost money; they run on a pack change, a model snapshot change, or before a release.
+4. **The replay is the wording regression gate** (`gate`, 4.8). A new pack version is accepted only when the cached public-data replay (section 10), re-scored with it, drops AUROC by no more than 0.02 and still hides at most 5% of real issues at the replay's chosen threshold `t*`. Each gate run is logged with the pack version, the model snapshot and the results. This gate is separate from the pre-registered pass rule (10.8), which it does not change.
+5. **An on-demand smoke set** (`smoke`, 4.9). 20 unmistakable examples with loose bounds (a clear problem scores at least 0.7, clear noise below 0.3), run by hand with a real key after a Jev model update.
+6. **Nothing that calls Jev runs in automated pull-request checks.** Such runs need a key and cost money; they run on a pack change, a model snapshot change, or before a release. A test asserts the CI workflow runs only the offline checks and holds no provider key.
 
 ### 5.5 Response handling
 
@@ -645,7 +692,7 @@ Each cut-off is resolved separately, from the first of these sources that sets i
 Rules:
 
 - **Source is always printed.** Every output prints the cut-offs with their source (`flag`, `repo config`, `user config`, `built-in`) and calibration state (`calibrated on <snapshot> by replay <name>`, `hand-set`, or `uncalibrated`).
-- **Written by replay.** When `replay` `evaluate` **passes** (10.8), it writes `collapse_below = t*` (10.7) to the user config, with provenance: `{ "replay": "<name>", "snapshot": "<model snapshot>", "tested_collapse_below": t*, "written_at": "<date>" }`. `keep_at` stays 0.70 unless `t*` is above it, in which case it is set to `t*`. A failing or inconclusive replay writes nothing. Existing hand-set values are replaced only after the replay prints what it is replacing.
+- **Written by replay.** When `replay` `evaluate` **passes** (10.8), it writes `collapse_below = t*` (10.7) to the user config, with provenance: `{ "replay": "<name>", "snapshot": "<model snapshot>", "tested_collapse_below": t*, "written_at": "<date>" }`. `keep_at` stays 0.70 unless `t*` is above it, in which case it is set to `t*`. A failing, refused or inconclusive replay writes nothing. Existing cut-offs in the user config are replaced only after the replay prints what it is replacing (a progress line before the write, and `cutoffs_replaced` in the output). Every other field of the user config is kept, and the file is written readable only by its owner. A no-op re-run of `evaluate` writes nothing again.
 - **Stale.** When the returned model snapshot differs from the one recorded with calibrated cut-offs, the cut-offs are still used but marked `stale`, and output warns and suggests a replay re-run.
 - **Above the tested value.** When the effective `collapse_below`, from any source, is higher than the last replay's `tested_collapse_below`, output warns that more real issues than the replay measured may be collapsed.
 - **No criterion for keep.** The pass rule constrains only the collapse edge. The keep cut-off (0.70) has no pre-registered criterion in v0. `report` prints the measured precision above it (share of `keep` items labelled real) with its 95% range, so it can be judged.
@@ -983,13 +1030,14 @@ Every rate and the AUROC are reported with a **95% range** from 2,000 seeded boo
 - **Keep precision:** the share of items with `worth >= keep_at` (0.70) that are labelled real. It has no pass criterion in v0 (6.2).
 - **Breakdowns**, reported but not part of the pass rule:
   - AUROC and counts per bot and per repository;
-  - a calibration table of `worth` deciles against the observed real rate;
-  - label rate by category and by severity level;
+  - a calibration table of `worth` in tenths (`[0, 0.1)` up to `[0.9, 1]`) against the observed real rate;
+  - label rate by category and by severity level (the severity words of 4.4);
   - duplicate rate;
   - excluded counts by reason;
-  - the same metrics on the label-check sample alone, as a robustness check.
+  - the same metrics on the label-check sample alone, as a robustness check (with M3).
 - **Run facts:** returned snapshot(s), total cost, and call count.
-  All scored items must share one snapshot. If they do not, `evaluate` reports per snapshot and refuses to apply the pass rule until the replay is re-scored on a single snapshot.
+  All scored items must share one snapshot. If they do not, `evaluate` reports per snapshot and refuses to apply the pass rule until the replay is re-scored on a single snapshot. The verdict is then `refused`; it is also `refused` when either class is empty, because AUROC is undefined.
+- **How the ranges are computed.** Percentile bootstrap: each of the 2,000 resamples draws as many items as the evaluated set, with replacement, from one generator (mulberry32) seeded with the replay config's `seed`; the range is the 2.5th to 97.5th percentile (linear interpolation) of the resampled values. `noise_collapsed` and `real_hidden` are resampled at the measured `t*`, held fixed. A resample where a value is undefined (no real items, say) is skipped for that value. The same data and seed always give the same ranges. Ranges are reported for AUROC, `noise_collapsed`, `real_hidden` and keep precision; the breakdown tables report measured values only.
 
 ### 10.8 Pass rule (pre-registered)
 
@@ -1053,6 +1101,9 @@ src/commands/
   update.ts                    repository-install update notice (4)
   replay.ts                    stage runner (4.6)
   report.ts                    replay summary (4.7)
+  gate.ts                      question-pack regression gate (4.8)
+  smoke.ts                     on-demand smoke set (4.9)
+  jev-run.ts                   cache, budget, cost log, key and redaction options for Jev judges
 src/inputs/
   github.ts                    Octokit client: token lookup, read-only guard, throttling (section 8)
   pull-request.ts              fetch + normalize PR comments into items (pure normalizers)
@@ -1061,7 +1112,7 @@ src/core/
   items.ts                     Item type, id assignment, stable ordering, body cleaning (5.3)
   state.ts                     state building, token estimate, file-grouped call packing (5.2, 5.3)
   question-pack.json           the versioned question pack (5.4.5) - the only place question wording lives
-  questions.ts                 loads the pack and fills its templates for an item
+  questions.ts                 loads and validates packs (built-in or a candidate file) and fills their templates
   cutoffs.ts                   cut-off resolution, provenance, stale and above-tested warnings (6.2)
   verdict.ts                   verdict, category, severity, duplicate rules (section 6); pure
 src/jev/
@@ -1070,6 +1121,7 @@ src/jev/
   typesafe.ts                  TypeSafe direct provider
   schema.ts                    zod schemas for answers and responses
   run-requests.ts              runs a run's requests: cache, budget, provider call, cost log
+  judge.ts                     Jev as a calibration judge: batches items per PR on the shared request builder
 src/infra/
   config.ts                    key lookup, user and repo config, permissions check
   redact.ts                    key, token and header redaction for every error path
@@ -1089,8 +1141,20 @@ src/replay/
   sample.ts                    eligibility and capped stratified sampling (10.4)
   label.ts                     diff anchoring and label rules (10.5)
   label-check.ts               AI labels, agreement, review file (10.6)
-  metrics.ts                   AUROC, bootstrap, sweep, calibration (10.7); pure
-  evaluate.ts                  pass rule and cut-off write-back (10.8, 6.2)
+  final-labels.ts              the final labels score and evaluate read (automatic labels until M3)
+  score.ts                     the score stage: drawn items to judge batches, scores.jsonl rows
+  evaluate.ts                  metrics, breakdowns and pass rule on the replay's data (10.7, 10.8)
+src/calibration/               judge-agnostic calibration kit; imports nothing outside itself
+  judge.ts                     Judge interface (any judge returning probabilities), judging labelled items
+  metrics.ts                   AUROC (rank method), threshold sweep, chosen threshold, precision, calibration table
+  bootstrap.ts                 seeded percentile bootstrap ranges
+  evaluate.ts                  evaluation with a pass rule, breakdowns, snapshot refusal
+  band.ts                      the abstain band and its calibrated edges
+  drift.ts                     snapshot drift of a calibration
+  gate.ts                      regression gate for a changed judge
+  random.ts                    mulberry32 seeded generator
+src/smoke/
+  smoke-set.json               the smoke set of 4.9
 src/output/
   render.ts                    TOON and --json renderers, --dry-run output
   human.ts                     --human renderer
@@ -1103,6 +1167,7 @@ replay/                        committed replay configs and result summaries
 ```
 
 Pure functions (verdict rules, cut-off resolution, metrics, labelling, sampling, state building) take plain objects and return plain objects.
+`src/calibration/` is kept free of Quiet Review, GitHub and provider imports (a test checks this), so it can later be published on its own as an eval-calibration kit; Quiet Review's replay, gate and smoke set are its first users.
 Only `inputs/github.ts`, `jev/*` and `infra/*` touch the network, the filesystem or child processes.
 Each receives its dependencies (fetch, clock, filesystem root, the `gh auth token` runner) as parameters, so tests can inject them.
 Octokit is constructed with the injected `fetch`, so one fake covers both GitHub and the providers.
@@ -1129,10 +1194,16 @@ Octokit is constructed with the injected `fetch`, so one fake covers both GitHub
   - **redaction:** with a key and a GitHub token set, no output, error, cache file or log line contains either (checked by scanning every written byte);
   - **GitHub write protection:** the Octokit wrapper throws on a non-GET REST call or a GraphQL mutation;
   - **verdicts never change the exit code:** a run where everything is collapsed exits 0.
+  - **replay `score`:** one request per PR on the shared builder with the PR header, excluded items skipped, no-op re-run, budget stop and resume, missing key, provider switch, and refusal to re-score with another pack;
+  - **replay `evaluate`:** pass with cut-off write-back and provenance (other config fields kept, mode 600, replaced values printed), fail, refused on mixed snapshots, `keep_at` raised to `t*`, the runs log, no-op re-run;
+  - **`report`:** the summary with ranges, byte-identical re-runs, `--json` tables, the latest replay by default, refusal output;
+  - **`gate`:** accepted, rejected on AUROC drop, rejected on real hidden at `t*`, the gate log, the replay's result and cut-offs untouched, refusals, budget stop, snapshot warning;
+  - **`smoke`:** pass, fail with the examples outside their bounds, budget stop, `--json`, and a check that CI holds no provider key and runs only offline checks.
 - **Pure unit tests:**
   - AUROC against hand-computed cases, including ties and the degenerate one-class case;
   - sweep and `t*` selection;
-  - bootstrap determinism with a fixed seed;
+  - bootstrap determinism with a fixed seed, and a range matching the binomial spread of a share;
+  - the pass rule on measured values, refusal on mixed snapshots or one class, breakdowns, the abstain band, snapshot drift and the regression gate, all through the calibration library's public interface;
   - label rules on synthetic diffs for every row of the 10.5 table, including outdated comments and additions next to the anchor;
   - agreement and disagreement patterns;
   - sampling caps under adversarial stratum sizes, including the 3-bot case;

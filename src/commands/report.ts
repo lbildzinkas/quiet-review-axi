@@ -143,7 +143,12 @@ export async function latestResult(root: string): Promise<ReplayResult | null> {
   for (const name of names.sort()) {
     const text = await readOptional(replayFiles(join(root, name)).result)
     if (text === null) continue
-    const result = JSON.parse(text) as ReplayResult
+    let result: ReplayResult
+    try {
+      result = JSON.parse(text) as ReplayResult
+    } catch {
+      continue
+    }
     if (latest === null || result.evaluated_at >= latest.evaluated_at) latest = result
   }
   return latest

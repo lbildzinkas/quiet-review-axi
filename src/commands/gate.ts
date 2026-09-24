@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { relative, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { encode } from '@toon-format/toon'
 import { judgeLabelled, regressionGate, type GateResult } from '../calibration/index.js'
@@ -63,10 +63,11 @@ export async function gateCommand(args: string[], context: AppContext): Promise<
       `The question pack ${pack.version} is the version replay ${name} was scored with; a changed pack needs a new version`,
       ['Run `quiet-review-axi gate <replay> --pack <file>` with a pack whose `version` is new'],
     )
-  if (baseline.auroc === null || baseline.best_threshold === null)
-    throw validationError(`Replay ${name} has no AUROC or best threshold to protect`, [
-      `Run \`quiet-review-axi report ${name}\` to see why`,
-    ])
+  if (baseline.verdict === 'refused' || baseline.auroc === null || baseline.best_threshold === null)
+    throw validationError(
+      `Replay ${name} has no single-snapshot AUROC and best threshold to protect`,
+      [`Run \`quiet-review-axi report ${name}\` to see why`],
+    )
 
   const userConfig = await loadUserConfig(context)
   const provider =
@@ -160,9 +161,13 @@ export async function gateCommand(args: string[], context: AppContext): Promise<
   const help =
     decision === 'accepted'
       ? [
-          `Pack ${pack.version} passed the gate: make it the built-in pack (src/core/question-pack.json) and record this run in replay/${name}.result.md`,
+          values.pack === undefined
+            ? `Run \`cat ${relative(context.cwd, files.runs)}\` to see every gate run, and record this one in replay/${name}.result.md`
+            : `Run \`cp ${values.pack} src/core/question-pack.json\` to adopt pack ${pack.version}, and record this gate run in replay/${name}.result.md`,
         ]
-      : [`Keep pack ${baseline.question_pack}, or rework the wording and gate it again`]
+      : [
+          `Run \`quiet-review-axi gate ${name} --pack <file>\` to gate a reworked pack; keep pack ${baseline.question_pack} until one is accepted`,
+        ]
   return render(view, help, asJson)
 }
 

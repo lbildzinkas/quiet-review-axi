@@ -102,7 +102,7 @@ export async function smokeCommand(args: string[], context: AppContext): Promise
     outside.length === 0
       ? ['Run `quiet-review-axi smoke --json` to see every example with its worth']
       : [
-          'A clear example outside its bound after a model update means the snapshot changed behaviour: run `quiet-review-axi replay <name>` on a new replay name, and `quiet-review-axi gate` for any pack change',
+          'Run `quiet-review-axi replay <new-name>` to re-measure the cut-offs on this snapshot: a clear example outside its bound means the model behaves differently',
         ]
   return render(view, help, asJson)
 }

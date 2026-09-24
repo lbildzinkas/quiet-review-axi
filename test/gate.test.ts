@@ -198,3 +198,27 @@ describe('question-pack regression gate', () => {
     )
   })
 })
+
+describe('question-pack regression gate baseline', () => {
+  it('refuses to gate against a replay whose pass rule was refused, and a pack version that is not a plain token', async () => {
+    const { sandbox, gitHub } = scoredReplay()
+    const mixed = jevByPart(WORTH, {
+      snapshot: (call) => (call <= 5 ? 'typesafe/jev-1.13-20260917' : 'typesafe/jev-1.13-20261001'),
+    })
+    await runReplay(['public-v1'], sandbox, gitHub, mixed)
+    const jev = jevByPart(WORTH)
+
+    const refused = await gate(['public-v1', '--pack', writeCandidatePack(sandbox)], sandbox, jev)
+    const traversal = await gate(
+      ['public-v1', '--pack', writeCandidatePack(sandbox, '../../escape')],
+      sandbox,
+      jev,
+    )
+
+    expect(refused.exitCode).toBe(2)
+    expect(refused.stdout).toContain('has no single-snapshot AUROC and best threshold to protect')
+    expect(traversal.exitCode).toBe(2)
+    expect(traversal.stdout).toContain('Invalid question pack packs/candidate.json: version')
+    expect(jev.calls).toHaveLength(0)
+  })
+})
