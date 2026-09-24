@@ -1,0 +1,6 @@
+dist
+node_modules
+.quiet-review
+package-lock.json
+docs
+*.md
