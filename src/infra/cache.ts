@@ -10,13 +10,17 @@ export function cacheKey(input: { provider: string; endpoint: string; body: unkn
   return createHash('sha256').update(canonicalJson(input)).digest('hex')
 }
 
-// Jev responses by default; the replay's label model caches its chat responses the same way.
+// Where a call's cost came from: the provider's report, tokens at listed prices, or a
+// flat-rate subscription that charges nothing per call (spec 10.6).
+export type CostSource = 'reported' | 'computed' | 'subscription'
+
+// Jev responses by default; the replay's label model caches its responses the same way.
 export interface CacheEntry<R = JevResponse> {
   response: R
   cachedAt: string
   latencyMs: number
   costUsd: number
-  costSource: 'reported' | 'computed'
+  costSource: CostSource
 }
 
 export async function readCacheEntry<R = JevResponse>(

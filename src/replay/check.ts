@@ -101,7 +101,8 @@ async function reviewOutcome(
       corrected: corrected.length,
     },
     label_check: {
-      model: options.model.model,
+      backend: options.model.backend.provider,
+      model: options.model.backend.model,
       cost_usd: rows.reduce((total, row) => total + row.cost_usd, 0),
       agreement: agreement.agreement,
       kappa: agreement.kappa,

@@ -1,39 +1,54 @@
-import { z } from 'zod'
-import { QuietReviewError, validationError } from '../errors.js'
+import { QuietReviewError } from '../errors.js'
 import type { Budget } from '../infra/budget.js'
-import { cacheKey, readCacheEntry, writeCacheEntry } from '../infra/cache.js'
+import { cacheKey, readCacheEntry, writeCacheEntry, type CostSource } from '../infra/cache.js'
 import { appendCallLog, type CallLogLine } from '../infra/call-log.js'
-import { postJson, type FetchLike } from '../jev/post.js'
+import type { DrawnItem } from './build.js'
 import {
   LABEL_PROMPT_VERSION,
-  buildLabelRequest,
   parseLabelAnswer,
   type AiLabel,
-  type ChatBody,
   type LabelledItem,
 } from './label-check.js'
 
-// The label model is called through OpenRouter's chat API (spec 10.6).
-export const CHAT_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
-const PROVIDER = 'openrouter'
-const KEY_ENV = 'OPENROUTER_API_KEY'
-// Chat answers take longer than Jev decisions.
-const CHAT_TIMEOUT_MS = 120_000
+// How the label check reaches its model (spec 10.6). A backend turns one item into a fixed
+// request, and a request into a reply; asking in order, caching, the budget and the call log
+// are shared by every backend. OpenRouter's chat API and the Pi CLI are backends today; a
+// backend for another subscription CLI plugs in the same way.
+export interface LabelBackend<R = unknown> {
+  // Names the backend in the cache key and in the call log's `provider`.
+  provider: string
+  // The configured model, as the call log and the stage record name it.
+  model: string
+  // How the progress line names the model.
+  describe: string
+  // The request for one item: the same item always gives the same request (R17). `body` is
+  // what the cache key hashes, so it holds everything that shapes the answer and no secret.
+  request: (item: DrawnItem) => LabelRequest
+  // False when the call could pass --max-cost (spec 9.4); the item is then left unlabelled.
+  // A backend that costs nothing per call always fits.
+  fits: (request: LabelRequest, budget: Budget) => Promise<boolean>
+  // Makes the call; failures are QuietReviewErrors. Only a validated response is returned.
+  call: (request: LabelRequest) => Promise<{ response: R; costUsd: number; costSource: CostSource }>
+  // A cached response that still validates, or null to ask again.
+  validate: (cached: unknown) => R | null
+  read: (response: R) => BackendReply
+}
 
-const chatResponseSchema = z.object({
-  id: z.string().optional(),
-  model: z.string(),
-  choices: z
-    .array(z.object({ message: z.object({ content: z.string().nullable().optional() }) }))
-    .min(1),
-  usage: z.object({
-    prompt_tokens: z.number().int().nonnegative(),
-    completion_tokens: z.number().int().nonnegative(),
-    cost: z.number().nullable().optional(),
-  }),
-})
+export interface LabelRequest {
+  endpoint: string
+  body: unknown
+}
 
-type ChatResponse = z.infer<typeof chatResponseSchema>
+// What a backend's response says, in the call log's terms.
+export interface BackendReply {
+  content: string
+  snapshot: string
+  responseId: string | null
+  inputTokens: number | null
+  outputTokens: number | null
+  // Extra run facts for the call log, such as a CLI's version; never text or secrets.
+  logFields?: Partial<CallLogLine>
+}
 
 export interface AiAnswer {
   id: string
@@ -47,19 +62,15 @@ export interface AiAnswer {
 
 export interface LabelModelOptions {
   sample: LabelledItem[]
+  backend: LabelBackend
   // Shared by every paid call of the invocation (spec 9.4).
   budget: Budget
-  model: string
   runId: string
   callLogPath: string
   redact: (text: string) => string
   progress: (line: string) => void
   useCache: boolean
   cacheDir: string
-  apiKey: () => string
-  fetch: FetchLike
-  sleep: (ms: number) => Promise<void>
-  random: () => number
   now: () => Date
 }
 
@@ -70,31 +81,38 @@ export interface LabelModelOutcome {
 }
 
 // Asks the label model about each sampled item in order, from the cache when it can, and
-// pays for a call only while its padded estimate fits the budget. After a stop, cache hits
-// are still served. Every attempt, cache hits included, is logged without any text (spec 9.3).
+// calls it only while the call fits the budget. After a stop, cache hits are still served.
+// Every attempt, cache hits included, is logged without any text (spec 9.3).
 export async function runLabelModel(options: LabelModelOptions): Promise<LabelModelOutcome> {
+  const { backend } = options
   const answers: AiAnswer[] = []
   const unlabelled: string[] = []
-  let pricing: Pricing | null = null
-  options.progress(`check: asking ${options.model} about ${options.sample.length} sampled comments`)
+  options.progress(
+    `check: asking ${backend.describe} about ${options.sample.length} sampled comments`,
+  )
   for (const { item } of options.sample) {
-    const body = buildLabelRequest(item, options.model)
-    const key = cacheKey({ provider: PROVIDER, endpoint: CHAT_ENDPOINT, body })
+    const request = backend.request(item)
+    const key = cacheKey({
+      provider: backend.provider,
+      endpoint: request.endpoint,
+      body: request.body,
+    })
     const baseLine = {
       run: options.runId,
       command: 'replay',
-      provider: PROVIDER,
-      model: options.model,
+      provider: backend.provider,
+      model: backend.model,
       prompt: LABEL_PROMPT_VERSION,
       request_hash: key,
       items: 1,
     }
-    const cached = options.useCache ? await readCached(options.cacheDir, key) : null
+    const cached = options.useCache ? await readCached(options.cacheDir, key, backend) : null
     if (cached) {
-      answers.push(toAnswer(item.id, cached.response, cached.costUsd))
+      const reply = backend.read(cached.response)
+      answers.push(toAnswer(item.id, reply, cached.costUsd))
       await log(options, {
         ...baseLine,
-        ...usageFields(cached.response),
+        ...replyFields(reply),
         cost_usd: 0,
         cost_source: cached.costSource,
         cached: true,
@@ -103,40 +121,21 @@ export async function runLabelModel(options: LabelModelOptions): Promise<LabelMo
       })
       continue
     }
-    if (unlabelled.length > 0 || !options.budget.hasRoom()) {
-      unlabelled.push(item.id)
-      continue
-    }
-    // The key comes first: a run without one fails with MISSING_KEY, not a price lookup.
-    const apiKey = options.apiKey()
-    pricing ??= await fetchPricing(options)
-    if (!options.budget.canAffordUsd(estimateCostUsd(body, pricing))) {
+    if (unlabelled.length > 0 || !(await backend.fits(request, options.budget))) {
       unlabelled.push(item.id)
       continue
     }
     const started = performance.now()
-    let response: ChatResponse
+    let outcome: Awaited<ReturnType<LabelBackend['call']>>
     try {
-      const { payload } = await postJson(
-        { name: PROVIDER, endpoint: CHAT_ENDPOINT, keyEnv: KEY_ENV, timeoutMs: CHAT_TIMEOUT_MS },
-        JSON.stringify(body),
-        {
-          apiKey,
-          fetch: options.fetch,
-          sleep: options.sleep,
-          random: options.random,
-        },
-      )
-      response = validateChatResponse(payload)
+      outcome = await backend.call(request)
     } catch (error) {
       if (error instanceof QuietReviewError && error.code !== 'MISSING_KEY')
         await log(options, { ...baseLine, ...failureFields(error, options.redact) })
       throw error
     }
     const latencyMs = Math.round(performance.now() - started)
-    const reported = response.usage.cost ?? undefined
-    const costUsd = reported ?? observedCostUsd(response, pricing)
-    const costSource = reported === undefined ? 'computed' : 'reported'
+    const { response, costUsd, costSource } = outcome
     options.budget.spend(costUsd)
     await writeCacheEntry(options.cacheDir, key, {
       response,
@@ -145,10 +144,11 @@ export async function runLabelModel(options: LabelModelOptions): Promise<LabelMo
       costUsd,
       costSource,
     })
-    answers.push(toAnswer(item.id, response, costUsd))
+    const reply = backend.read(response)
+    answers.push(toAnswer(item.id, reply, costUsd))
     await log(options, {
       ...baseLine,
-      ...usageFields(response),
+      ...replyFields(reply),
       cost_usd: costUsd,
       cost_source: costSource,
       cached: false,
@@ -159,99 +159,13 @@ export async function runLabelModel(options: LabelModelOptions): Promise<LabelMo
   return { answers, unlabelled }
 }
 
-// The label model's prices, USD per token, from OpenRouter's public model list.
-export const MODELS_ENDPOINT = 'https://openrouter.ai/api/v1/models'
-
-interface Pricing {
-  prompt: number
-  completion: number
-  request: number
-}
-
-// Prices are strings of USD per token; router models list "-1" for a variable price, so each
-// entry is read loosely and only the label model's own prices must be fixed.
-const modelsSchema = z.object({
-  data: z.array(
-    z.object({ id: z.unknown(), pricing: z.record(z.string(), z.unknown()).optional() }),
-  ),
-})
-
-// What OpenRouter writes for a fixed price: a plain decimal, no exponent or unit.
-const DECIMAL = /^-?\d+(?:\.\d+)?$/
-
-async function fetchPricing(options: LabelModelOptions): Promise<Pricing> {
-  const listed = await fetchModelList(options.fetch)
-  const entry = listed.find((model) => model.id === options.model)
-  if (!entry)
-    throw validationError(
-      `The label model ${options.model} in label_check.model is not a model OpenRouter lists`,
-      [FROZEN_CONFIG_HELP],
-    )
-  // A listed price is fixed only as a number, or a non-empty string writing a plain decimal
-  // of USD, finite and non-negative; "" and "-1" (variable) are no fixed price. The request
-  // fee is not per-token but answers to the same rule, and reads as free only when omitted.
-  const fixed = (field: string): number | null => {
-    const listed = entry.pricing?.[field]
-    if (typeof listed === 'number') return Number.isFinite(listed) && listed >= 0 ? listed : null
-    if (typeof listed === 'string' && DECIMAL.test(listed.trim())) {
-      const price = Number(listed)
-      return Number.isFinite(price) && price >= 0 ? price : null
-    }
-    return null
-  }
-  const prompt = fixed('prompt')
-  const completion = fixed('completion')
-  const request = fixed('request')
-  const requestListed = entry.pricing?.request !== undefined
-  if (prompt === null || completion === null || (requestListed && request === null))
-    throw validationError(
-      `The label model ${options.model} has no fixed per-token price, so --max-cost cannot bound its calls`,
-      [FROZEN_CONFIG_HELP],
-    )
-  return { prompt, completion, request: request ?? 0 }
-}
-
-const FROZEN_CONFIG_HELP =
-  'The replay config is frozen once build has run: put a listed, fixed-price model id in a config with a new replay name'
-
-async function fetchModelList(fetch: FetchLike) {
-  let status = 0
-  try {
-    const response = await fetch(MODELS_ENDPOINT, { method: 'GET' })
-    status = response.status
-    const parsed = response.ok ? modelsSchema.safeParse(await response.json()) : null
-    if (parsed?.success) return parsed.data.data
-  } catch {
-    // Reported below with the other failures to read the list.
-  }
-  throw new QuietReviewError(
-    'PROVIDER_ERROR',
-    `Could not read OpenRouter's model list${status === 0 ? '' : ` (HTTP ${status})`}`,
-  )
-}
-
-// A call's cost before it is made: its prompt tokens estimated like Jev requests
-// (characters / 3.5, spec 5.2), plus the most output the request allows.
-function estimateCostUsd(body: ChatBody, pricing: Pricing): number {
-  const promptTokens = Math.ceil(JSON.stringify(body.messages).length / 3.5)
-  return promptTokens * pricing.prompt + body.max_tokens * pricing.completion + pricing.request
-}
-
-function observedCostUsd(response: ChatResponse, pricing: Pricing): number {
-  const { usage } = response
-  return (
-    usage.prompt_tokens * pricing.prompt +
-    usage.completion_tokens * pricing.completion +
-    pricing.request
-  )
-}
-
-function usageFields(response: ChatResponse) {
+function replyFields(reply: BackendReply) {
   return {
-    snapshot: response.model,
-    response_id: response.id ?? null,
-    input_tokens: response.usage.prompt_tokens,
-    output_tokens: response.usage.completion_tokens,
+    snapshot: reply.snapshot,
+    response_id: reply.responseId,
+    input_tokens: reply.inputTokens,
+    output_tokens: reply.outputTokens,
+    ...reply.logFields,
   }
 }
 
@@ -280,25 +194,14 @@ async function log(options: LabelModelOptions, line: Omit<CallLogLine, 'ts'>) {
   await appendCallLog(options.callLogPath, { ts: options.now().toISOString(), ...line })
 }
 
-async function readCached(dir: string, key: string) {
-  const entry = await readCacheEntry<ChatResponse>(dir, key)
+async function readCached(dir: string, key: string, backend: LabelBackend) {
+  const entry = await readCacheEntry<unknown>(dir, key)
   if (!entry) return null
   // An entry that no longer validates is treated as a miss and replaced.
-  const parsed = chatResponseSchema.safeParse(entry.response)
-  return parsed.success ? { ...entry, response: parsed.data } : null
+  const response = backend.validate(entry.response)
+  return response === null ? null : { ...entry, response }
 }
 
-function validateChatResponse(payload: unknown): ChatResponse {
-  const parsed = chatResponseSchema.safeParse(payload)
-  if (!parsed.success)
-    throw new QuietReviewError(
-      'INVALID_RESPONSE',
-      'The label model returned an invalid response: it does not match the chat completion shape',
-    )
-  return parsed.data
-}
-
-function toAnswer(id: string, response: ChatResponse, costUsd: number): AiAnswer {
-  const content = response.choices[0]?.message.content ?? ''
-  return { id, ...parseLabelAnswer(content), model: response.model, cost_usd: costUsd }
+function toAnswer(id: string, reply: BackendReply, costUsd: number): AiAnswer {
+  return { id, ...parseLabelAnswer(reply.content), model: reply.snapshot, cost_usd: costUsd }
 }

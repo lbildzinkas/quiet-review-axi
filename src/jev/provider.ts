@@ -1,4 +1,5 @@
 import { QuietReviewError } from '../errors.js'
+import type { CostSource } from '../infra/cache.js'
 import type { Question } from '../core/questions.js'
 import { postJson, type PostOptions } from './post.js'
 import { answerSchema, responseSchema, type Answer, type JevResponse } from './schema.js'
@@ -17,7 +18,7 @@ export interface JevResult {
   responseId?: string
   inputTokens: number
   costUsd: number
-  costSource: 'reported' | 'computed'
+  costSource: CostSource
   retries: number
   response: JevResponse
 }
