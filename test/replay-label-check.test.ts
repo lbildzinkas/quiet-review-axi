@@ -479,6 +479,28 @@ describe('label-check budget (spec 9.4)', () => {
     expect(labelModel.chatCalls).toHaveLength(0)
   })
 
+  it('reads prices past models with a variable price, and refuses a label model without a fixed price', async () => {
+    const variable = { prompt: '-1', completion: '-1' }
+    const fixed = setupReplay()
+    const unpriced = setupReplay()
+    const fixedModel = createFakeLabelModel({
+      models: { 'openrouter/auto': variable, ...PRICED.models },
+    })
+
+    const ok = await runReplay(['public-v1'], fixed.sandbox, fixed.gitHub, fixedModel)
+    const refused = await runReplay(
+      ['public-v1'],
+      unpriced.sandbox,
+      unpriced.gitHub,
+      createFakeLabelModel({ models: { 'example/label-model': variable } }),
+    )
+
+    expect(ok.exitCode).toBe(0)
+    expect(fixedModel.chatCalls).toHaveLength(4)
+    expect(refused.exitCode).toBe(2)
+    expect(refused.stdout).toContain('has no fixed per-token price')
+  })
+
   it('needs an OpenRouter key for a paid call', async () => {
     const { sandbox, gitHub } = setupReplay()
 

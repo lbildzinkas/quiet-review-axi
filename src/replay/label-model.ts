@@ -166,45 +166,56 @@ interface Pricing {
   request: number
 }
 
-const price = z.coerce.number().nonnegative().optional()
+// Prices are strings of USD per token; router models list "-1" for a variable price, so each
+// entry is read loosely and only the label model's own prices must be fixed.
 const modelsSchema = z.object({
   data: z.array(
-    z.object({
-      id: z.string(),
-      pricing: z.object({ prompt: price, completion: price, request: price }).optional(),
-    }),
+    z.object({ id: z.unknown(), pricing: z.record(z.string(), z.unknown()).optional() }),
   ),
 })
 
 async function fetchPricing(options: LabelModelOptions): Promise<Pricing> {
-  let response: Response
-  try {
-    response = await options.fetch(MODELS_ENDPOINT, { method: 'GET' })
-  } catch (error) {
-    throw new QuietReviewError(
-      'PROVIDER_ERROR',
-      `Could not read OpenRouter's model list: ${error instanceof Error ? error.message : String(error)}`,
-    )
-  }
-  const parsed = response.ok ? modelsSchema.safeParse(await response.json()) : null
-  if (!parsed?.success)
-    throw new QuietReviewError(
-      'PROVIDER_ERROR',
-      `Could not read OpenRouter's model list (HTTP ${response.status})`,
-    )
-  const entry = parsed.data.data.find((model) => model.id === options.model)
+  const listed = await fetchModelList(options.fetch)
+  const entry = listed.find((model) => model.id === options.model)
   if (!entry)
     throw validationError(
       `The label model ${options.model} in label_check.model is not a model OpenRouter lists`,
-      [
-        'The replay config is frozen once build has run: put the corrected model id in a config with a new replay name',
-      ],
+      [FROZEN_CONFIG_HELP],
     )
-  return {
-    prompt: entry.pricing?.prompt ?? 0,
-    completion: entry.pricing?.completion ?? 0,
-    request: entry.pricing?.request ?? 0,
+  const perToken = (field: string) => {
+    const value = Number(entry.pricing?.[field] ?? 0)
+    return Number.isFinite(value) && value >= 0 ? value : null
   }
+  const pricing = {
+    prompt: perToken('prompt'),
+    completion: perToken('completion'),
+    request: perToken('request'),
+  }
+  if (pricing.prompt === null || pricing.completion === null || pricing.request === null)
+    throw validationError(
+      `The label model ${options.model} has no fixed per-token price, so --max-cost cannot bound its calls`,
+      [FROZEN_CONFIG_HELP],
+    )
+  return { prompt: pricing.prompt, completion: pricing.completion, request: pricing.request }
+}
+
+const FROZEN_CONFIG_HELP =
+  'The replay config is frozen once build has run: put a listed, fixed-price model id in a config with a new replay name'
+
+async function fetchModelList(fetch: FetchLike) {
+  let status = 0
+  try {
+    const response = await fetch(MODELS_ENDPOINT, { method: 'GET' })
+    status = response.status
+    const parsed = response.ok ? modelsSchema.safeParse(await response.json()) : null
+    if (parsed?.success) return parsed.data.data
+  } catch {
+    // Reported below with the other failures to read the list.
+  }
+  throw new QuietReviewError(
+    'PROVIDER_ERROR',
+    `Could not read OpenRouter's model list${status === 0 ? '' : ` (HTTP ${status})`}`,
+  )
 }
 
 // A call's cost before it is made: its prompt tokens estimated like Jev requests
