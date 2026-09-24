@@ -107,6 +107,22 @@ describe('replay score stage', () => {
     expect(again.fetchCalls).toHaveLength(0)
   })
 
+  it('points at evaluating after the score stage completes on its own', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    await runReplay(['public-v1', '--stage', 'build'], sandbox, gitHub)
+    await runReplay(['public-v1', '--stage', 'label'], sandbox, gitHub)
+
+    const scored = await runReplay(['public-v1', '--stage', 'score'], sandbox, gitHub)
+
+    expect(scored.exitCode).toBe(0)
+    expect(scored.stdout).toContain('score,done')
+    expect(scored.stdout).not.toContain('evaluate,done')
+    expect(scored.stdout).toContain(
+      'Run `quiet-review-axi replay public-v1` to evaluate the pre-registered pass rule',
+    )
+    expect(scored.stdout).not.toContain('--stage label')
+  })
+
   it('stops at --max-cost with exit 3, and a re-run resumes paying only for the rest', async () => {
     const { sandbox, gitHub } = setupReplay()
     const jev = createFakeJev()

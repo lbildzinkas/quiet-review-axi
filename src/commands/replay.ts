@@ -441,7 +441,7 @@ function helpLines(run: ReplayRun): string[] {
       `Run \`quiet-review-axi replay ${run.name}\` to score the labelled items with Jev (paid; --max-cost limits the spend)`,
     ]
   return [
-    `Run \`quiet-review-axi replay ${run.name} --stage label\` to recompute the labels from the recorded evidence`,
+    `Run \`quiet-review-axi replay ${run.name}\` to evaluate the pre-registered pass rule on the scored items`,
   ]
 }
 
