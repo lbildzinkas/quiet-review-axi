@@ -2,6 +2,7 @@ import { encode } from '@toon-format/toon'
 import { runAxiCli } from 'axi-sdk-js'
 import { HOME_HELP, homeView } from './commands/home.js'
 import { REPLAY_HELP, replayCommand } from './commands/replay.js'
+import { REPORT_HELP, reportCommand } from './commands/report.js'
 import { SCORE_HELP, scoreCommand } from './commands/score.js'
 import { updateCommand } from './commands/update.js'
 import type { AppContext } from './context.js'
@@ -19,13 +20,15 @@ const TOP_LEVEL_HELP = `${encode({
   usage: 'quiet-review-axi <command> [args] [flags]',
   commands: {
     score: "Score a pull request's review comments, or a findings file, with Jev",
-    replay: 'Build and label the public replay dataset (accuracy experiment)',
+    replay: 'Build, label, score and evaluate the public replay dataset (accuracy experiment)',
+    report: 'Print the accuracy summary of an evaluated replay, with 95% ranges',
     update: 'Show how to install the latest version from the repository',
   },
 })}
 ${renderHelp([
   'Run `quiet-review-axi score --help` for the score flags',
   'Run `quiet-review-axi replay --help` for the replay stages and flags',
+  'Run `quiet-review-axi report` to see the latest replay result',
   'Run `quiet-review-axi` with no command to see the current setup',
 ])}
 `
@@ -54,11 +57,13 @@ export async function main(context: AppContext): Promise<number> {
       commands: {
         score: (args, ctx) => scoreCommand(args, ctx ?? context),
         replay: (args, ctx) => replayCommand(args, ctx ?? context),
+        report: (args, ctx) => reportCommand(args, ctx ?? context),
         update: (args) => updateCommand(args),
       },
       getCommandHelp: (command) => {
         if (command === 'score') return `${SCORE_HELP}\n`
         if (command === 'replay') return `${REPLAY_HELP}\n`
+        if (command === 'report') return `${REPORT_HELP}\n`
         return null
       },
       formatError: (error) => {

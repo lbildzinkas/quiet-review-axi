@@ -52,6 +52,7 @@ export interface RunOptions {
   stdin?: string
   ghAuthToken?: string
   sleep?: (ms: number) => Promise<void>
+  now?: Date
 }
 
 export interface RunResult {
@@ -90,7 +91,7 @@ export async function runCli(argv: string[], options: RunOptions = {}): Promise<
     },
     sleep: options.sleep ?? (async () => {}),
     random: () => 0.5,
-    now: () => new Date('2026-09-24T10:00:00.000Z'),
+    now: () => options.now ?? new Date('2026-09-24T10:00:00.000Z'),
   })
   return { stdout, stderr, exitCode, sandbox, fetchCalls, ghCalls }
 }

@@ -290,8 +290,9 @@ async function evaluateStage(run: ReplayRun): Promise<void> {
       tested_collapse_below: result.best_threshold,
       written_at: result.evaluated_at.slice(0, 10),
     })
+    result.cutoffs_written = `${describeUserCutoffs(result.calibrated_cutoffs, false)} -> ${path}`
     run.cutoffsWritten = {
-      written: `${describeUserCutoffs(result.calibrated_cutoffs, false)} -> ${path}`,
+      written: result.cutoffs_written,
       replaced:
         current?.collapse_below !== undefined || current?.keep_at !== undefined
           ? describeUserCutoffs(current)
@@ -433,6 +434,8 @@ function helpLines(run: ReplayRun): string[] {
     return [`Run \`quiet-review-axi replay ${run.name}\` to build and label the dataset`]
   if (!run.manifest.stages.label)
     return [`Run \`quiet-review-axi replay ${run.name} --stage label\` to label the dataset`]
+  if (run.manifest.stages.evaluate)
+    return [`Run \`quiet-review-axi report ${run.name}\` to see the metrics with their 95% ranges`]
   if (!run.manifest.stages.score)
     return [
       `Run \`quiet-review-axi replay ${run.name}\` to score the labelled items with Jev (paid; --max-cost limits the spend)`,
@@ -470,24 +473,31 @@ export const REPLAY_HELP = joinBlocks(
     usage:
       'quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [--config <file>] [--dir <path>]',
     description:
-      'Builds the public replay dataset and its automatic labels, in resumable stages stored in a replay directory',
+      'Builds the public replay dataset, labels it, scores it with Jev and evaluates the pre-registered pass rule, in resumable stages stored in a replay directory',
     stages: {
       build: 'Select repositories, bots and comments from GitHub per the replay config (read only)',
       label: 'Label every drawn comment real, noise or excluded from the recorded evidence',
       check: 'Not available in this version yet',
-      score: 'Not available in this version yet',
-      evaluate: 'Not available in this version yet',
+      score: 'Score every labelled comment with Jev, one request per pull request (paid)',
+      evaluate:
+        'Compute AUROC, the threshold sweep and 95% ranges, apply the pass rule, and on a pass write calibrated cut-offs to the user config',
     },
     flags: {
       '--stage <build|label|check|score|evaluate>':
         'Run only this stage (default: every stage not yet complete)',
       '--config <file>': 'Replay config (default: replay/<name>.config.json)',
       '--dir <path>': 'Replay directory (default: .quiet-review/replays/<name>)',
+      '--provider <openrouter|typesafe>': 'Jev backend (default: openrouter, or the user config)',
+      '--max-cost <usd>':
+        'Stop before a paid call would pass this run total (default: 0.50; 0 = cache only)',
+      '--no-cache': 'Skip cache reads and make fresh calls',
       '--json': 'Emit one JSON document',
     },
-    exit_codes: '0 ok, 1 unexpected, 2 validation or changed config, 4 GitHub problem',
+    exit_codes:
+      '0 ok (a failing pass rule is data, not an error), 1 unexpected, 2 validation or changed config, 3 budget stop, 4 key, provider or GitHub problem',
   }),
   renderHelp([
-    'Run `quiet-review-axi replay public-v1` to build and label the replay configured in replay/public-v1.config.json',
+    'Run `quiet-review-axi replay public-v1` to run every stage of the replay configured in replay/public-v1.config.json',
+    'Run `quiet-review-axi report public-v1` to see its result',
   ]),
 )

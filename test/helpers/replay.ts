@@ -38,9 +38,11 @@ export function runReplay(
   sandbox: Sandbox,
   gitHub?: FakeGitHubReplay,
   jev: FakeJev = createFakeJev(),
+  now?: Date,
 ) {
   return runCli(['replay', ...argv], {
     sandbox,
+    now,
     env: { ...TOKEN, ...JEV_KEY },
     fetch: combineHandlers(
       ...(gitHub ? [{ matches: gitHub.matches, handle: gitHub.handle }] : []),

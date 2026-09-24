@@ -48,6 +48,8 @@ export interface ReplayResult {
   keep_precision_ci95: Interval | null
   // The cut-offs a pass calibrates: collapse at the best threshold, keep at 0.70 or above it.
   calibrated_cutoffs: { collapse_below: number; keep_at: number } | null
+  // Set when a pass wrote the calibrated cut-offs: what was written, and where.
+  cutoffs_written?: string
   bootstrap: { resamples: number; seed: number }
   sweep: { threshold: number; noise_collapsed: number; real_hidden: number }[]
   calibration: {
