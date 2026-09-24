@@ -107,8 +107,14 @@ export async function runBuild(options: {
     const compare = compares.get(compareKey) ?? null
     if (!threads.has(candidate.pr))
       threads.set(candidate.pr, await fetchThreadResolution(client, pull.repository, pull.number))
-    const file = compare?.files.find((entry) => entry.filename === comment.path) ?? null
-    const needsLines = file !== null && file.deletions > 0
+    // A file renamed after the comment is listed under its new name.
+    const file =
+      compare?.files.find(
+        (entry) => entry.filename === comment.path || entry.previous_filename === comment.path,
+      ) ?? null
+    // Rule 2 needs the file's size at `from`; deleted and renamed files are excluded anyway.
+    const needsLines =
+      file !== null && file.status !== 'removed' && file.status !== 'renamed' && file.deletions > 0
     return {
       from,
       to,

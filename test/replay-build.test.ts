@@ -430,3 +430,51 @@ describe('replay output', () => {
     expect(rejected.stdout).not.toContain(TOKEN.GITHUB_TOKEN)
   })
 })
+
+describe('label evidence read from GitHub (spec 10.5)', () => {
+  it('excludes a comment whose file was renamed or deleted after it', async () => {
+    const { sandbox, gitHub } = setup({
+      config: { target_items: 100 },
+      specs: [
+        {
+          name: 'acme/widgets',
+          bots: { 'coderabbitai[bot]': 10 },
+          compareFile: ({ pr }, path) => {
+            if (pr === 1)
+              return { filename: 'src/moved.ts', previous_filename: path, status: 'renamed' }
+            if (pr === 2) return { filename: path, status: 'removed', deletions: 100 }
+            return null
+          },
+        },
+      ],
+    })
+
+    const result = await replay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('label,done,"real 0, noise 8, excluded 2"')
+    expect(result.stdout).toContain('file deleted,1')
+    expect(result.stdout).toContain('file renamed,1')
+  })
+
+  it('labels an unchanged comment real when a person agreed and resolved the thread', async () => {
+    const { sandbox, gitHub } = setup({
+      config: { target_items: 100 },
+      specs: [
+        {
+          name: 'acme/widgets',
+          bots: { 'coderabbitai[bot]': 10 },
+          changed: () => false,
+          resolved: ({ pr }) => pr <= 3,
+          replies: ({ pr, bot }) => [
+            ...(pr <= 2 ? [{ login: 'alice', body: 'Good catch, fixed in the caller.' }] : []),
+            ...(pr === 4 ? [{ login: bot, type: 'Bot', body: 'Thanks, fixed!' }] : []),
+          ],
+        },
+      ],
+    })
+
+    const result = await replay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('label,done,"real 2, noise 8, excluded 0"')
+  })
+})

@@ -38,6 +38,8 @@ export interface RepositorySpec {
   body?: (comment: CommentContext) => string
   // Field overrides for a root comment, for example to drop its line anchor.
   comment?: (comment: CommentContext) => Partial<FakeComment>
+  // The comparison entry for the comment's file, replacing the `changed` default.
+  compareFile?: (comment: CommentContext, path: string) => FakeCompareFile | null
 }
 
 export const COMMENT_LINE = 10
@@ -105,6 +107,11 @@ export function buildWorld(specs: RepositorySpec[]): FakeReplayWorld {
             })
           }
           if (pull.resolved) pull.resolved[id] = spec.resolved?.(context) ?? false
+          if (spec.compareFile) {
+            const file = spec.compareFile(context, path)
+            if (file) files.push(file)
+            continue
+          }
           const isChanged = spec.changed ? spec.changed(context) : pr % 2 === 1
           if (isChanged) {
             files.push(modifiedAt(path, COMMENT_LINE))
