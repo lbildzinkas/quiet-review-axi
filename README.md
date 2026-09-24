@@ -13,6 +13,7 @@ Output is compact [AXI](https://github.com/kunchenguid/axi) TOON for coding agen
 v0 is decided by an accuracy replay on public pull requests: it checks whether Jev's scores separate comments developers acted on from comments they ignored.
 The project continues only if the replay passes a rule fixed in advance (AUROC ≥ 0.75, and collapsing at least 40% of noise while hiding at most 5% of real issues).
 Until then, the verdict cut-offs are the generic 0.30 / 0.70 band, labelled `uncalibrated` in every output.
+The first live replay, [`public-v1`](replay/public-v1.result.md) (2026-09-24), was inconclusive: its automatic labels failed the label check's trust gate, so the pass rule was not judged and the go/no-go decision is still open.
 
 | Command | State |
 |---|---|
