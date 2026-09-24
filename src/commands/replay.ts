@@ -30,6 +30,9 @@ import { createReplayFetch } from '../replay/fetch.js'
 import { readFinalLabels } from '../replay/final-labels.js'
 import { labelComment, type Label } from '../replay/label.js'
 import { LABEL_PROMPT_VERSION } from '../replay/label-check.js'
+import type { LabelBackend } from '../replay/label-model.js'
+import { openRouterBackend } from '../replay/label-openrouter.js'
+import { piBackend } from '../replay/label-pi.js'
 import { scoreLabelledItems, type ScoreRow } from '../replay/score.js'
 import type { Rejection } from '../replay/select.js'
 import {
@@ -370,6 +373,7 @@ async function checkStage(run: ReplayRun): Promise<void> {
   const previous = run.manifest.stages.check
   const { context } = run
   const userConfig = await loadUserConfig(context)
+  const redact = createRedactor(secretsOf(context.env, userConfig))
   const outcome = await runCheck({
     files,
     sample: { size: run.loaded.config.label_check.sample_size, seed: run.loaded.config.seed },
@@ -379,22 +383,14 @@ async function checkStage(run: ReplayRun): Promise<void> {
     ),
     needsModel: previous?.input_hash !== inputHash,
     model: {
-      model: run.loaded.config.label_check.model,
+      backend: labelBackend(run, userConfig, redact),
       runId: `r-${randomBytes(4).toString('hex')}`,
       callLogPath: callLogPath(context.env),
-      redact: createRedactor(secretsOf(context.env, userConfig)),
+      redact,
       progress: (line: string) => context.stderr.write(`${line}\n`),
       budget: run.budget,
       useCache: !run.flags.noCache,
       cacheDir: labelCacheDir(context.env),
-      apiKey: () => {
-        const found = findApiKey(openRouterProvider, context.env, userConfig)
-        if (!found) throw missingKeyError(openRouterProvider)
-        return found.key
-      },
-      fetch: context.fetch,
-      sleep: context.sleep,
-      random: context.random,
       now: context.now,
     },
   })
@@ -406,6 +402,35 @@ async function checkStage(run: ReplayRun): Promise<void> {
   if (previous?.input_hash === inputHash && sameOutcome(previous, record)) return
   run.manifest.stages.check = { input_hash: inputHash, ...record }
   await writeManifest(run.dir, run.manifest)
+}
+
+// The label check's backend (spec 10.6): OpenRouter's paid chat API unless the config picks
+// the Pi CLI, which answers on a subscription.
+function labelBackend(
+  run: ReplayRun,
+  userConfig: Awaited<ReturnType<typeof loadUserConfig>>,
+  redact: (text: string) => string,
+): LabelBackend {
+  const { context } = run
+  const check = run.loaded.config.label_check
+  if (check.backend === 'pi')
+    return piBackend({
+      model: check.model,
+      thinking: check.thinking ?? 'off',
+      env: context.env,
+      redact,
+    }) as LabelBackend
+  return openRouterBackend({
+    model: check.model,
+    apiKey: () => {
+      const found = findApiKey(openRouterProvider, context.env, userConfig)
+      if (!found) throw missingKeyError(openRouterProvider)
+      return found.key
+    },
+    fetch: context.fetch,
+    sleep: context.sleep,
+    random: context.random,
+  }) as LabelBackend
 }
 
 function evaluateDetail(result: ReplayResult): string {
@@ -500,6 +525,7 @@ async function renderReplay(run: ReplayRun): Promise<string> {
   }
   const labelCheck = run.manifest.stages.check?.label_check
   if (labelCheck) {
+    view.label_backend = labelCheck.backend ?? 'openrouter'
     view.label_model = labelCheck.model
     view.label_check_cost_usd = roundCost(labelCheck.cost_usd)
     view.trust = labelCheck.trust
@@ -571,6 +597,11 @@ function helpLines(run: ReplayRun): string[] {
     return [
       `Run \`quiet-review-axi replay ${run.name}\` after setting \`label\` to real, noise or excluded on each line of ${relative(run.context.cwd, replayFiles(run.dir).review)}, to record the reviewed labels and evaluate`,
     ]
+  const check = run.loaded.config.label_check
+  if (!run.manifest.stages.check && check.backend === 'pi')
+    return [
+      `Run \`quiet-review-axi replay ${run.name} --stage check\` to check a sample of the labels with ${check.model} through pi (subscription, no per-call cost)`,
+    ]
   if (!run.manifest.stages.check)
     return [
       `Run \`quiet-review-axi replay ${run.name} --stage check --max-cost <usd>\` to check a sample of the labels with the label model (paid, needs OPENROUTER_API_KEY)`,
@@ -612,7 +643,7 @@ export const REPLAY_HELP = joinBlocks(
       build: 'Select repositories, bots and comments from GitHub per the replay config (read only)',
       label: 'Label every drawn comment real, noise or excluded from the recorded evidence',
       check:
-        'Ask the label model (paid, OpenRouter key) about a seeded sample, report agreement, and write the disagreements to review.jsonl for the maintainer',
+        'Ask the label model about a seeded sample, report agreement, and write the disagreements to review.jsonl for the maintainer; label_check.backend picks OpenRouter (paid, OpenRouter key) or the pi CLI (subscription, $0 per call)',
       score: 'Score every labelled comment with Jev, one request per pull request (paid)',
       evaluate:
         'Compute AUROC, the threshold sweep and 95% ranges, apply the pass rule, and on a pass write calibrated cut-offs to the user config',

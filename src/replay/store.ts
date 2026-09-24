@@ -29,6 +29,8 @@ export interface StageRecord {
   cost_usd?: number
   // Agreement figures and the trust gate (check stage, spec 10.6).
   label_check?: {
+    // How the label model was reached: `openrouter` or `pi` (absent in older records: openrouter).
+    backend?: string
     model: string
     // What the sample's answers cost when they were paid for; cache hits count their first cost.
     cost_usd: number

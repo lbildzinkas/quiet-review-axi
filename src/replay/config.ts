@@ -14,6 +14,39 @@ function unique(values: string[]): boolean {
   return new Set(values).size === values.length
 }
 
+// Pi's thinking levels (`pi --thinking`).
+export const PI_THINKING_LEVELS = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const
+
+// How the label check reaches its model (spec 10.6): OpenRouter's paid chat API when `backend`
+// is absent or `openrouter`, or the Pi CLI on a subscription, which also needs `thinking`.
+const labelCheckSchema = z
+  .object({
+    sample_size: positiveInteger,
+    backend: z.enum(['openrouter', 'pi']).optional(),
+    model: z.string().min(1),
+    thinking: z.enum(PI_THINKING_LEVELS).optional(),
+  })
+  .strict()
+  .superRefine((check, context) => {
+    const isPi = check.backend === 'pi'
+    if (isPi && check.thinking === undefined)
+      context.addIssue({
+        code: 'custom',
+        path: ['thinking'],
+        message: `is required with backend pi: one of ${PI_THINKING_LEVELS.join(', ')}`,
+      })
+    if (!isPi && check.thinking !== undefined)
+      context.addIssue({ code: 'custom', path: ['thinking'], message: 'is only for backend pi' })
+  })
+
 // The replay config (spec 10.2). Strict, so a typo cannot silently change the experiment.
 const replayConfigSchema = z
   .object({
@@ -26,7 +59,7 @@ const replayConfigSchema = z
     max_share_per_bot: share,
     max_items_per_pr: positiveInteger,
     seed: z.number().int(),
-    label_check: z.object({ sample_size: positiveInteger, model: z.string().min(1) }).strict(),
+    label_check: labelCheckSchema,
     pass_rule: z
       .object({
         min_auroc: z.number().min(0).max(1),
