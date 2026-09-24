@@ -1,14 +1,17 @@
 import type { GitHubClient } from '../inputs/github.js'
 import type { ReplayConfig } from './config.js'
+import { isBot } from '../inputs/pull-request.js'
 import {
   fetchCompare,
+  fetchFileLines,
+  fetchThreadResolution,
   fetchReplayPull,
   searchMergedPulls,
   type CompareResult,
   type ReplayComment,
   type ReplayPull,
 } from './github.js'
-import { labelComment, type Evidence } from './label.js'
+import { labelComment, type Evidence, type Reply } from './label.js'
 import { drawSample, type Candidate } from './sample.js'
 
 // One drawn comment with everything the label stage needs (spec 10.4, 10.5).
@@ -70,20 +73,32 @@ export async function runBuild(options: {
   candidates.sort((a, b) => compareText(a.key, b.key))
 
   const compares = new Map<string, CompareResult | null>()
+  const threads = new Map<string, Map<number, boolean>>()
   const evidenceFor = async (candidate: EligibleComment): Promise<Evidence> => {
-    const from = candidate.comment.original_commit_id
-    const to = candidate.pull.headSha
+    const { comment, pull } = candidate
+    const from = comment.original_commit_id
+    const to = pull.headSha
     const compareKey = `${candidate.repository}:${from}...${to}`
     if (!compares.has(compareKey))
       compares.set(compareKey, await fetchCompare(client, candidate.repository, from, to))
     const compare = compares.get(compareKey) ?? null
-    const line = candidate.comment.original_line
+    if (!threads.has(candidate.pr))
+      threads.set(candidate.pr, await fetchThreadResolution(client, pull.repository, pull.number))
+    const file = compare?.files.find((entry) => entry.filename === comment.path) ?? null
+    const needsLines = file !== null && file.deletions > 0
     return {
       from,
       to,
-      anchor:
-        line === null ? null : { start: candidate.comment.original_start_line ?? line, end: line },
-      file: compare?.files.find((file) => file.filename === candidate.comment.path) ?? null,
+      anchor: anchorOf(comment),
+      compare:
+        compare === null
+          ? null
+          : { merge_base: compare.mergeBase, files_listed: compare.files.length, file },
+      file_lines: needsLines
+        ? await fetchFileLines(client, candidate.repository, comment.path, from)
+        : null,
+      resolved: threads.get(candidate.pr)?.get(comment.id) ?? false,
+      replies: repliesTo(pull, comment.id),
     }
   }
 
@@ -91,6 +106,10 @@ export async function runBuild(options: {
   const draws = await drawSample({
     candidates,
     target: config.target_items,
+    maxSharePerRepository: config.max_share_per_repository,
+    maxSharePerBot: config.max_share_per_bot,
+    maxItemsPerPr: config.max_items_per_pr,
+    seed: config.seed,
     isExcluded: async (candidate) => {
       const found = await evidenceFor(candidate)
       evidence.set(candidate.key, found)
@@ -132,6 +151,24 @@ function eligibleComments(pull: ReplayPull, config: ReplayConfig): EligibleComme
       pr: `${pull.repository}#${pull.number}`,
       pull,
       comment,
+    }))
+}
+
+// The commented range on the new side at `from`. A comment on the old side (LEFT) has none.
+function anchorOf(comment: ReplayComment): Evidence['anchor'] {
+  const end = comment.original_line
+  if (end === null || comment.side === 'LEFT') return null
+  return { start: comment.original_start_line ?? end, end }
+}
+
+function repliesTo(pull: ReplayPull, rootId: number): Reply[] {
+  return pull.comments
+    .filter((comment) => comment.in_reply_to_id === rootId)
+    .sort((a, b) => compareText(a.created_at, b.created_at) || a.id - b.id)
+    .map((comment) => ({
+      author: comment.user?.login ?? '',
+      is_bot: isBot(comment.user),
+      body: comment.body,
     }))
 }
 
