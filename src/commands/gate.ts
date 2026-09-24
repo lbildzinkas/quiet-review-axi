@@ -63,6 +63,14 @@ export async function gateCommand(args: string[], context: AppContext): Promise<
       `The question pack ${pack.version} is the version replay ${name} was scored with; a changed pack needs a new version`,
       ['Run `quiet-review-axi gate <replay> --pack <file>` with a pack whose `version` is new'],
     )
+  if (baseline.verdict === 'inconclusive')
+    throw validationError(
+      `Replay ${name} is inconclusive: its automatic labels are not trusted, so its metrics cannot judge a pack`,
+      [
+        `Run \`quiet-review-axi report ${name}\` to see the trust reasons`,
+        'Revise the label rules and rerun the replay under a new name before gating a pack',
+      ],
+    )
   if (baseline.verdict === 'refused' || baseline.auroc === null || baseline.best_threshold === null)
     throw validationError(
       `Replay ${name} has no single-snapshot AUROC and best threshold to protect`,

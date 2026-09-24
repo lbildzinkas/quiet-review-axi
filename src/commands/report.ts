@@ -70,6 +70,8 @@ function summaryView(
     verdict: result.verdict,
   }
   if (result.refusal !== null) view.refusal = result.refusal
+  // Why the label check made the verdict inconclusive (10.6).
+  if (result.verdict === 'inconclusive') view.trust_reasons = result.trust_reasons ?? []
   Object.assign(view, {
     model: result.snapshots.join(', ') || 'none',
     question_pack: result.question_pack,

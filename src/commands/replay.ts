@@ -286,8 +286,18 @@ async function evaluateStage(run: ReplayRun): Promise<void> {
     throw validationError(`The score stage of replay ${run.name} has not run yet`, [
       `Run \`quiet-review-axi replay ${run.name} --stage score\` first`,
     ])
+  const check = run.manifest.stages.check
+  const trust = check?.label_check
+    ? {
+        verdict: check.label_check.trust,
+        reasons: check.label_check.trust_reasons,
+        awaiting_review: (check.counts?.to_review ?? 0) - (check.counts?.reviewed ?? 0),
+      }
+    : null
   const inputHash = hashText(
-    [itemsText, labels.text, scoresText, run.loaded.hash].map(hashText).join('\n'),
+    [itemsText, labels.text, scoresText, run.loaded.hash, canonicalJson(trust)]
+      .map(hashText)
+      .join('\n'),
   )
   if (run.manifest.stages.evaluate?.input_hash === inputHash) return
   const { context } = run
@@ -297,6 +307,7 @@ async function evaluateStage(run: ReplayRun): Promise<void> {
     items: fromJsonl<DrawnItem>(itemsText),
     labels: labels.labels,
     sampled: labels.sampled,
+    trust,
     scores: fromJsonl<ScoreRow>(scoresText),
     scoring: {
       question_pack: scoring.question_pack ?? '',
@@ -399,6 +410,8 @@ async function checkStage(run: ReplayRun): Promise<void> {
 
 function evaluateDetail(result: ReplayResult): string {
   if (result.verdict === 'refused') return `refused: ${result.refusal}`
+  if (result.verdict === 'inconclusive')
+    return `inconclusive: ${(result.trust_reasons ?? []).join('; ')}`
   const auroc = result.auroc === null ? 'n/a' : String(Number(result.auroc.toFixed(3)))
   const threshold = result.best_threshold === null ? 'none' : String(result.best_threshold)
   return `${result.verdict}: auroc ${auroc}, best threshold ${threshold}`

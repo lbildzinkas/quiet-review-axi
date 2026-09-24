@@ -10,6 +10,7 @@ import {
 import { BUILT_IN_CUTOFFS } from '../core/cutoffs.js'
 import { severityWord } from '../output/human.js'
 import type { DrawnItem } from './build.js'
+import type { TrustVerdict } from './check.js'
 import type { ReplayConfig } from './config.js'
 import type { FinalLabel } from './final-labels.js'
 import type { ScoreRow } from './score.js'
@@ -48,8 +49,12 @@ export interface ReplayResult extends HeadlineMetrics {
   question_pack: string
   provider: string
   snapshots: string[]
-  verdict: 'pass' | 'fail' | 'refused'
+  verdict: 'pass' | 'fail' | 'refused' | 'inconclusive'
   refusal: string | null
+  // The label check's trust verdict and, when inconclusive, why (spec 10.6); null when the
+  // replay has no check stage. Absent from results evaluated before evaluate read it.
+  trust?: TrustVerdict | null
+  trust_reasons?: string[]
   pass_rule: ReplayConfig['pass_rule']
   keep_at: number
   // The cut-offs a pass calibrates: collapse at the best threshold, keep at 0.70 or above it.
@@ -80,6 +85,14 @@ export interface ReplayResult extends HeadlineMetrics {
   cost_usd: number
 }
 
+// The label check's trust gate (spec 10.6 step 6), as its stage record keeps it.
+export interface LabelTrust {
+  verdict: TrustVerdict
+  reasons: string[]
+  // Items of the check's sample still waiting for the maintainer's label.
+  awaiting_review: number
+}
+
 export const BOOTSTRAP_RESAMPLES = 2000
 
 // Computes the metrics on the final labels, over items labelled real (positive) or noise,
@@ -91,6 +104,8 @@ export function evaluateReplay(input: {
   labels: FinalLabel[]
   // The label-check sample's ids once its review is complete, else null.
   sampled: string[] | null
+  // The check stage's trust gate, or null when the replay has no check stage.
+  trust: LabelTrust | null
   scores: ScoreRow[]
   scoring: { question_pack: string; provider: string; calls: number; cost_usd: number }
   excludedByReason: Record<string, number>
@@ -131,8 +146,9 @@ export function evaluateReplay(input: {
   const evaluation = evaluateJudgments(judgments, options)
   const sampled = input.sampled === null ? null : new Set(input.sampled)
   const { threshold } = evaluation
+  const { verdict, refusal } = trustedVerdict(evaluation, input.trust)
   const band =
-    evaluation.verdict === 'pass' && threshold
+    verdict === 'pass' && threshold
       ? calibratedBand({
           threshold: threshold.threshold,
           defaults: { lower: BUILT_IN_CUTOFFS.collapseBelow, upper: BUILT_IN_CUTOFFS.keepAt },
@@ -145,13 +161,10 @@ export function evaluateReplay(input: {
     question_pack: input.scoring.question_pack,
     provider: input.scoring.provider,
     snapshots: evaluation.snapshots,
-    verdict: evaluation.verdict,
-    refusal:
-      evaluation.refusal === 'mixed snapshots'
-        ? `scored on ${evaluation.snapshots.length} snapshots; re-score on one before the pass rule applies`
-        : evaluation.refusal === 'one class'
-          ? 'needs both real and noise items'
-          : null,
+    verdict,
+    refusal,
+    trust: input.trust?.verdict ?? null,
+    trust_reasons: input.trust?.reasons ?? [],
     pass_rule: rule,
     ...headlineMetrics(evaluation),
     keep_at: BUILT_IN_CUTOFFS.keepAt,
@@ -190,6 +203,29 @@ export function evaluateReplay(input: {
     calls: input.scoring.calls,
     cost_usd: input.scoring.cost_usd,
   }
+}
+
+// The trust gate (spec 10.6 step 6) turns a pass or a fail into inconclusive when the label
+// check found the automatic labels unreliable, and refuses the pass rule while the review is
+// unfinished. A refusal of the pass rule itself stands.
+function trustedVerdict(
+  evaluation: Evaluation,
+  trust: LabelTrust | null,
+): { verdict: ReplayResult['verdict']; refusal: string | null } {
+  if (evaluation.refusal === 'mixed snapshots')
+    return {
+      verdict: 'refused',
+      refusal: `scored on ${evaluation.snapshots.length} snapshots; re-score on one before the pass rule applies`,
+    }
+  if (evaluation.refusal === 'one class')
+    return { verdict: 'refused', refusal: 'needs both real and noise items' }
+  if (trust?.verdict === 'inconclusive') return { verdict: 'inconclusive', refusal: null }
+  if (trust?.verdict === 'pending review')
+    return {
+      verdict: 'refused',
+      refusal: `${trust.awaiting_review} label-check ${trust.awaiting_review === 1 ? 'item awaits' : 'items await'} review; label them in review.jsonl before the pass rule applies`,
+    }
+  return { verdict: evaluation.verdict, refusal: null }
 }
 
 function headlineMetrics(evaluation: Evaluation): HeadlineMetrics {
