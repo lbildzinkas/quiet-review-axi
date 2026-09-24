@@ -13,6 +13,7 @@ import {
   loadRepoConfig,
   loadUserConfig,
   missingKeyError,
+  secretsOf,
   type UserConfig,
 } from '../infra/config.js'
 import { cacheDir, callLogPath } from '../infra/paths.js'
@@ -103,7 +104,7 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
     sleep: context.sleep,
     random: context.random,
     now: context.now,
-    redact: createRedactor(secretsOf(context, userConfig)),
+    redact: createRedactor(secretsOf(context.env, userConfig)),
   })
   const scoredKeys = new Set(run.calls.flatMap((call) => call.request.itemKeys))
   const scoredItems = input.items.filter((item) => scoredKeys.has(item.key))
@@ -173,17 +174,6 @@ function requireApiKey(provider: JevProvider, context: AppContext, userConfig: U
   const found = findApiKey(provider, context.env, userConfig)
   if (!found) throw missingKeyError(provider)
   return found.key
-}
-
-export function secretsOf(context: AppContext, userConfig: UserConfig): (string | undefined)[] {
-  return [
-    context.env.OPENROUTER_API_KEY,
-    context.env.TYPESAFE_API_KEY,
-    context.env.GITHUB_TOKEN,
-    context.env.GH_TOKEN,
-    userConfig.keys?.openrouter,
-    userConfig.keys?.typesafe,
-  ]
 }
 
 async function pullRequestInput(

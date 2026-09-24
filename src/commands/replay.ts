@@ -1,26 +1,24 @@
+import { randomBytes } from 'node:crypto'
 import { relative, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { encode } from '@toon-format/toon'
 import type { AppContext } from '../context.js'
 import { BudgetStop, validationError } from '../errors.js'
 import { createBudget, type Budget } from '../infra/budget.js'
-import { DEFAULT_MAX_COST, parseNumber } from './score-args.js'
+import { canonicalJson } from '../infra/canonical-json.js'
+import { findApiKey, loadUserConfig, missingKeyError, secretsOf } from '../infra/config.js'
+import { callLogPath, labelCacheDir } from '../infra/paths.js'
+import { createRedactor } from '../infra/redact.js'
 import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
+import { openRouterProvider } from '../jev/openrouter.js'
 import { joinBlocks, renderHelp, roundCost } from '../output/render.js'
 import { MAX_REPOSITORIES, MIN_REPOSITORIES, runBuild, type DrawnItem } from '../replay/build.js'
+import { runCheck } from '../replay/check.js'
 import { defaultConfigPath, loadReplayConfig, type LoadedReplayConfig } from '../replay/config.js'
 import { runDiscovery, type Discovery, type DiscoveredRepository } from '../replay/discover.js'
 import { createReplayFetch } from '../replay/fetch.js'
-import { findApiKey, loadUserConfig, missingKeyError } from '../infra/config.js'
-import { openRouterProvider } from '../jev/openrouter.js'
 import { labelComment, type Label } from '../replay/label.js'
 import { LABEL_PROMPT_VERSION } from '../replay/label-check.js'
-import { runCheck } from '../replay/check.js'
-import { canonicalJson } from '../infra/canonical-json.js'
-import { callLogPath, labelCacheDir } from '../infra/paths.js'
-import { createRedactor } from '../infra/redact.js'
-import { secretsOf } from './score.js'
-import { randomBytes } from 'node:crypto'
 import type { Rejection } from '../replay/select.js'
 import {
   fromJsonl,
@@ -37,6 +35,7 @@ import {
   type StageName,
   type StageRecord,
 } from '../replay/store.js'
+import { DEFAULT_MAX_COST, parseNumber } from './score-args.js'
 
 const REPLAY_FLAGS = {
   stage: { type: 'string' },
@@ -216,7 +215,8 @@ async function checkStage(run: ReplayRun): Promise<void> {
       model: run.loaded.config.label_check.model,
       runId: `r-${randomBytes(4).toString('hex')}`,
       callLogPath: callLogPath(context.env),
-      redact: createRedactor(secretsOf(context, userConfig)),
+      redact: createRedactor(secretsOf(context.env, userConfig)),
+      progress: (line: string) => context.stderr.write(`${line}\n`),
       budget: run.budget,
       useCache: run.useCache,
       cacheDir: labelCacheDir(context.env),

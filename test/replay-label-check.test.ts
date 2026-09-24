@@ -117,6 +117,7 @@ describe('replay label check (spec 10.6)', () => {
       'check,done,"4 sampled, AI agreement 1 (kappa 1), 0 reviewed, 0 automatic labels corrected"',
     )
     expect(labelModel.chatCalls).toHaveLength(4)
+    expect(result.stderr).toContain('check: asking example/label-model about 4 sampled comments')
   })
 
   it('writes disagreements and unsure answers to review.jsonl with evidence and links, then waits for review', async () => {

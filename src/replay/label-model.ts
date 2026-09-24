@@ -53,6 +53,7 @@ export interface LabelModelOptions {
   runId: string
   callLogPath: string
   redact: (text: string) => string
+  progress: (line: string) => void
   useCache: boolean
   cacheDir: string
   apiKey: () => string
@@ -75,6 +76,7 @@ export async function runLabelModel(options: LabelModelOptions): Promise<LabelMo
   const answers: AiAnswer[] = []
   const unlabelled: string[] = []
   let pricing: Pricing | null = null
+  options.progress(`check: asking ${options.model} about ${options.sample.length} sampled comments`)
   for (const { item } of options.sample) {
     const body = buildLabelRequest(item, options.model)
     const key = cacheKey({ provider: PROVIDER, endpoint: CHAT_ENDPOINT, body })
