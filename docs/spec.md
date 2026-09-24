@@ -373,7 +373,7 @@ quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [-
   | File | Written by | Content |
   |---|---|---|
   | `manifest.json` | every stage | the config hash `build` ran with, and one record per completed stage (input hash, detail, counts) |
-  | `github/` | `build` | every GitHub response, keyed by method, URL and body (never headers, so never the token), so a rebuild makes no network calls (8.1) |
+  | `github/` | `build` | the GitHub answers that stay the same on a re-run, keyed by method, URL and body (never headers, so never the token), so a rebuild makes no network calls (8.1) |
   | `candidates.jsonl` | `build` in discovery mode | qualifying candidate repositories (10.3) |
   | `build-log.jsonl` | `build` | every rejected repository or bot, with its reason (10.3) |
   | `items.jsonl` | `build` | every drawn comment, labelled or excluded, with its label evidence (10.5) |
@@ -733,8 +733,8 @@ Quiet Review calls GitHub's REST and GraphQL APIs directly with Octokit (`@octok
 - A test covers both (11.3).
 - v0 needs no write scope: a fine-grained token with read access to public repositories is enough.
 
-GitHub responses fetched by `replay build` are cached in the replay directory (9.2). A rebuild makes no network calls.
-Only answers that stay the same on a re-run are cached: 200, 404 (for example a commit lost to a force-push) and 422.
+GitHub responses fetched by `replay build` are cached in the replay directory (4.6). A rebuild makes no network calls.
+Only answers that stay the same on a re-run are cached: 200, 404 (for example a commit lost to a force-push) and 422; any other answer, such as the oversized-file 403 of 10.5, is asked again when `build` re-runs.
 Octokit's throttling and retry plugins handle GitHub's primary and secondary rate limits. A limit still hit after retries is `GITHUB_RATE_LIMIT` (exit 4).
 `replay build` spaces search requests that reach the network at least 2 s apart (GitHub allows 30 searches a minute); cached searches are not delayed. The throttling plugin's own search and write spacing is switched off for that client: it never writes, and its GraphQL reads are POSTs the plugin would otherwise pace as writes.
 
@@ -935,14 +935,14 @@ Only replies in the comment's own thread are evidence; review bodies and PR conv
 |---|---|---|
 | 1 | `from` or `to` cannot be fetched (force-push lost the commit), the anchor cannot be mapped, or the file was deleted or renamed after the comment | `excluded` (reason recorded) |
 | 2 | More than 50% of the file's lines changed between `from` and `to` (large rewrite; a change at the anchor may be coincidence) | `excluded: rewrite` |
-
-Rule 1's recorded reasons: `commit unavailable` (the comparison is not found); `history rewritten` (the comparison's merge base is not `from`, so `from` is no longer an ancestor of `to`); `anchor unmapped`; `file deleted`; `file renamed`; `diff unavailable` (GitHub returned no patch for the file, or listed 300 files, its maximum, without it); `file unavailable` (the file's line count at `from`, needed for rule 2, could not be read; the contents endpoint refuses files larger than 100 MB with a 403 naming the file too large).
-Rule 2 measures the share as the file's deleted or modified lines (the comparison's `deletions`) over its line count at `from`; exactly 50% is not a rewrite.
 | 3 | `agree` and `disagree` both present | `excluded: conflicting replies` |
 | 4 | `changed` and `disagree` | `excluded: conflicting signals` |
 | 5 | `changed` | `real` |
 | 6 | not `changed`, and `agree` and `resolved` (fixed somewhere else) | `real` |
 | 7 | anything else (not changed; ignored, dismissed, or resolved without a change) | `noise` |
+
+Rule 1's recorded reasons: `commit unavailable` (the comparison is not found); `history rewritten` (the comparison's merge base is not `from`, so `from` is no longer an ancestor of `to`); `anchor unmapped`; `file deleted`; `file renamed`; `diff unavailable` (GitHub returned no patch for the file, or listed 300 files, its maximum, without it); `file unavailable` (the file's line count at `from`, needed for rule 2, could not be read; the contents endpoint refuses files larger than 100 MB with a 403 naming the file too large).
+Rule 2 measures the share as the file's deleted or modified lines (the comparison's `deletions`) over its line count at `from`; exactly 50% is not a rewrite.
 
 A nit or style comment that led to a change is labelled `real`: the author acted on it. This follows R5 literally. Section 14, question 2 records the consequence.
 

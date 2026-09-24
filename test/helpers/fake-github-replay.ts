@@ -262,15 +262,10 @@ function tooLarge(shape: 'code' | 'message') {
     shape === 'code'
       ? 'The contents of this file cannot be returned'
       : 'This file is too large to display'
-  return jsonResponse(
-    403,
-    {
-      message,
-      documentation_url: 'https://docs.github.com/rest/repos/contents#get-repository-content',
-      status: '403',
-      ...(shape === 'code'
-        ? { errors: [{ resource: 'Core', code: 'too_large', message }] }
-        : {}),
-    },
-  )
+  return jsonResponse(403, {
+    message,
+    documentation_url: 'https://docs.github.com/rest/repos/contents#get-repository-content',
+    status: '403',
+    ...(shape === 'code' ? { errors: [{ resource: 'Core', code: 'too_large', message }] } : {}),
+  })
 }
