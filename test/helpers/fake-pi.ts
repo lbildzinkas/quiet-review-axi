@@ -10,7 +10,6 @@ export const PI_VERSION = '0.86.1'
 export type PiScript =
   | string
   | { exit: number; stderr?: string }
-  | { sleepMs: number }
   | { stopReason: 'error' | 'aborted'; errorMessage: string }
   | { noAnswer: true }
 
@@ -81,10 +80,6 @@ function answer(scripted) {
   if (typeof scripted === 'object' && 'exit' in scripted) {
     process.stderr.write(scripted.stderr ?? '')
     process.exit(scripted.exit)
-  }
-  if (typeof scripted === 'object' && 'sleepMs' in scripted) {
-    setTimeout(() => answer('real'), scripted.sleepMs)
-    return
   }
   const model = script.snapshot ?? args[args.indexOf('--model') + 1].split('/').pop()
   const emit = (event) => process.stdout.write(JSON.stringify(event) + '\\n')

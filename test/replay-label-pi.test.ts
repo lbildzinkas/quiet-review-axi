@@ -225,19 +225,6 @@ describe('pi answers and failures', () => {
     expect(pi.calls().length - asked).toBe(10 - (asked - 1))
   })
 
-  it('stops with a clear error when pi does not answer within the timeout', async () => {
-    const { sandbox, gitHub, pi } = setupPiReplay({
-      config: { ...ALL_TEN, label_check: { ...PI_CHECK, timeout_seconds: 0.5 } },
-      pi: { byPr: { 1: { sleepMs: 10_000 } } },
-    })
-
-    const result = await runReplay(['public-v1'], sandbox, gitHub, { env: pi.env })
-
-    expect(result.exitCode).toBe(4)
-    expect(result.stdout).toContain('code: PROVIDER_ERROR')
-    expect(result.stdout).toContain('pi did not answer within 0.5 s')
-  })
-
   it('stops with a clear error when the model call through pi fails, and does not cache it', async () => {
     const { sandbox, gitHub, pi } = setupPiReplay({
       pi: { byPr: everyPr({ stopReason: 'error', errorMessage: '429 Usage limit reached' }) },

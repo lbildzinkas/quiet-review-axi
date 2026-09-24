@@ -32,7 +32,7 @@ import { labelComment, type Label } from '../replay/label.js'
 import { LABEL_PROMPT_VERSION } from '../replay/label-check.js'
 import type { LabelBackend } from '../replay/label-model.js'
 import { openRouterBackend } from '../replay/label-openrouter.js'
-import { DEFAULT_PI_TIMEOUT_SECONDS, piBackend } from '../replay/label-pi.js'
+import { piBackend } from '../replay/label-pi.js'
 import { scoreLabelledItems, type ScoreRow } from '../replay/score.js'
 import type { Rejection } from '../replay/select.js'
 import {
@@ -417,7 +417,6 @@ function labelBackend(
     return piBackend({
       model: check.model,
       thinking: check.thinking ?? 'off',
-      timeoutSeconds: check.timeout_seconds ?? DEFAULT_PI_TIMEOUT_SECONDS,
       env: context.env,
       redact,
     }) as LabelBackend

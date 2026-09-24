@@ -33,7 +33,6 @@ const labelCheckSchema = z
     backend: z.enum(['openrouter', 'pi']).optional(),
     model: z.string().min(1),
     thinking: z.enum(PI_THINKING_LEVELS).optional(),
-    timeout_seconds: z.number().positive().optional(),
   })
   .strict()
   .superRefine((check, context) => {
@@ -44,9 +43,8 @@ const labelCheckSchema = z
         path: ['thinking'],
         message: `is required with backend pi: one of ${PI_THINKING_LEVELS.join(', ')}`,
       })
-    for (const field of ['thinking', 'timeout_seconds'] as const)
-      if (!isPi && check[field] !== undefined)
-        context.addIssue({ code: 'custom', path: [field], message: 'is only for backend pi' })
+    if (!isPi && check.thinking !== undefined)
+      context.addIssue({ code: 'custom', path: ['thinking'], message: 'is only for backend pi' })
   })
 
 // The replay config (spec 10.2). Strict, so a typo cannot silently change the experiment.

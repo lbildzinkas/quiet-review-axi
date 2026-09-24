@@ -9,7 +9,7 @@ import type { LabelBackend } from './label-model.js'
 // program never sees a credential. Each call costs $0 against --max-cost.
 const COMMAND = 'pi'
 const PROVIDER = 'pi'
-export const DEFAULT_PI_TIMEOUT_SECONDS = 300
+const DEFAULT_PI_TIMEOUT_SECONDS = 300
 const VERSION_TIMEOUT_MS = 30_000
 // Pi adds its working directory to the system prompt, so it runs in a fixed one (R17).
 const WORKING_DIRECTORY = '/'
@@ -20,7 +20,6 @@ export interface PiBackendOptions {
   model: string
   // Pi's thinking level, such as `max`.
   thinking: string
-  timeoutSeconds: number
   // The environment pi runs in: its PATH finds `pi`, its HOME holds pi's sign-in.
   env: Record<string, string | undefined>
   redact: (text: string) => string
@@ -41,7 +40,7 @@ type PiResponse = z.infer<typeof piResponseSchema>
 
 export function piBackend(options: PiBackendOptions): LabelBackend<PiResponse> {
   let version: string | null = null
-  const timeoutMs = options.timeoutSeconds * 1000
+  const timeoutMs = DEFAULT_PI_TIMEOUT_SECONDS * 1000
   return {
     provider: PROVIDER,
     model: options.model,

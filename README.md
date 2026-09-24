@@ -153,7 +153,7 @@ The `check` stage asks a second, independent model to label a sample of 60 comme
 The replay config picks how that model is reached, in `label_check`:
 
 - **OpenRouter** (default): `{ "sample_size": 60, "model": "<OpenRouter model id>" }`. Each call is paid, needs `OPENROUTER_API_KEY`, and counts against `--max-cost`.
-- **A subscription, through the [Pi](https://github.com/earendil-works/pi) coding agent CLI**: `{ "sample_size": 60, "backend": "pi", "model": "zai-coding-cn/glm-5.3", "thinking": "max" }`. Quiet Review runs `pi` for each comment, with the fixed label prompt, no tools and no session. `pi` must be installed and already signed in to the provider; Quiet Review never reads its credentials. Calls cost $0 against `--max-cost` and need no OpenRouter key. An optional `timeout_seconds` (default 300) bounds each call.
+- **A subscription, through the [Pi](https://github.com/earendil-works/pi) coding agent CLI**: `{ "sample_size": 60, "backend": "pi", "model": "zai-coding-cn/glm-5.3", "thinking": "max" }`. Quiet Review runs `pi` for each comment, with the fixed label prompt, no tools and no session. `pi` must be installed and already signed in to the provider; Quiet Review never reads its credentials. Calls cost $0 against `--max-cost` and need no OpenRouter key. Each call is bounded by a fixed 300 s timeout.
 
 Answers are cached, so a re-run after a failure asks only about the comments still unanswered.
 A subscription is meant for modest use: the check makes about 60 calls once per dataset.
