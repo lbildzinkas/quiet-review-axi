@@ -90,6 +90,7 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
 
   const run = await runRequests({
     command: 'score',
+    questionPack: QUESTION_PACK_VERSION,
     runId: `r-${randomBytes(4).toString('hex')}`,
     provider,
     requests,

@@ -2,14 +2,19 @@ import { relative, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { encode } from '@toon-format/toon'
 import type { AppContext } from '../context.js'
-import { validationError } from '../errors.js'
+import { QUESTION_PACK_VERSION, BUILT_IN_PACK } from '../core/questions.js'
+import { BudgetStop, validationError } from '../errors.js'
+import { loadUserConfig } from '../infra/config.js'
 import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
-import { joinBlocks, renderHelp } from '../output/render.js'
+import { PROVIDERS } from '../jev/providers.js'
+import { joinBlocks, renderHelp, resumeLimit, roundCost } from '../output/render.js'
 import { MAX_REPOSITORIES, MIN_REPOSITORIES, runBuild, type DrawnItem } from '../replay/build.js'
 import { defaultConfigPath, loadReplayConfig, type LoadedReplayConfig } from '../replay/config.js'
 import { runDiscovery, type Discovery, type DiscoveredRepository } from '../replay/discover.js'
 import { createReplayFetch } from '../replay/fetch.js'
+import { readFinalLabels } from '../replay/final-labels.js'
 import { labelComment } from '../replay/label.js'
+import { scoreLabelledItems } from '../replay/score.js'
 import type { Rejection } from '../replay/select.js'
 import {
   fromJsonl,
@@ -25,11 +30,16 @@ import {
   type Manifest,
   type StageName,
 } from '../replay/store.js'
+import { jevJudgeOptions } from './jev-run.js'
+import { DEFAULT_MAX_COST, parseNumber, parseProvider } from './score-args.js'
 
 const REPLAY_FLAGS = {
   stage: { type: 'string' },
   config: { type: 'string' },
   dir: { type: 'string' },
+  provider: { type: 'string' },
+  'max-cost': { type: 'string' },
+  'no-cache': { type: 'boolean' },
   json: { type: 'boolean' },
 } as const
 
@@ -37,7 +47,7 @@ const REPLAY_FLAGS = {
 const MAX_REJECTED_ROWS = 20
 
 // Stages this version implements; the rest come with later milestones (spec 12).
-const AVAILABLE_STAGES: StageName[] = ['build', 'label']
+const AVAILABLE_STAGES: StageName[] = ['build', 'label', 'score']
 
 interface ReplayRun {
   name: string
@@ -46,8 +56,17 @@ interface ReplayRun {
   manifest: Manifest
   context: AppContext
   asJson: boolean
+  flags: ReplayFlags
   // Set when `build` searched for candidate repositories instead of building (spec 10.3).
   discovery?: Discovery
+  // Set when `score` stopped at --max-cost (spec 9.4).
+  stopped?: { scored: number; total: number }
+}
+
+interface ReplayFlags {
+  provider?: 'openrouter' | 'typesafe'
+  maxCost: number
+  noCache: boolean
 }
 
 export async function replayCommand(args: string[], context: AppContext): Promise<string> {
@@ -67,16 +86,24 @@ export async function replayCommand(args: string[], context: AppContext): Promis
     manifest: await readManifest(dir, name),
     context,
     asJson: values.json ?? false,
+    flags: {
+      provider: parseProvider(values.provider),
+      maxCost: parseNumber('--max-cost', values['max-cost']) ?? DEFAULT_MAX_COST,
+      noCache: values['no-cache'] ?? false,
+    },
   }
   assertPreRegistered(run)
 
   for (const next of stage === undefined ? AVAILABLE_STAGES : [stage]) {
     if (next === 'build') await buildStage(run)
-    // Without --stage, stop at the first stage that could not complete.
-    if (stage === undefined && !run.manifest.stages.build) break
     if (next === 'label') await labelStage(run)
+    if (next === 'score') await scoreStage(run)
+    // Without --stage, stop at the first stage that could not complete.
+    if (stage === undefined && !run.manifest.stages[next]) break
   }
-  return await renderReplay(run)
+  const output = await renderReplay(run)
+  if (run.stopped) throw new BudgetStop(output)
+  return output
 }
 
 // Once `build` has run, the config is frozen: its hash was recorded (spec 4.6, 10.2).
@@ -157,9 +184,71 @@ async function labelStage(run: ReplayRun): Promise<void> {
   await writeManifest(run.dir, run.manifest)
 }
 
+// Scores every labelled item with Jev (spec 4.6). The question pack is part of the
+// pre-registration: once the stage has scored with one pack, it never re-scores with another.
+async function scoreStage(run: ReplayRun): Promise<void> {
+  const files = replayFiles(run.dir)
+  const itemsText = run.manifest.stages.label ? await readOptional(files.items) : null
+  const labels = run.manifest.stages.label ? await readFinalLabels(run.dir) : null
+  if (itemsText === null || labels === null)
+    throw validationError(`The label stage of replay ${run.name} has not run yet`, [
+      `Run \`quiet-review-axi replay ${run.name} --stage label\` first`,
+    ])
+  const inputHash = hashText(`${hashText(itemsText)}\n${hashText(labels.text)}`)
+  const record = run.manifest.stages.score
+  if (record?.input_hash === inputHash) return
+  if (record?.question_pack !== undefined && record.question_pack !== QUESTION_PACK_VERSION)
+    throw validationError(
+      `Replay ${run.name} was scored with question pack ${record.question_pack}; this build carries ${QUESTION_PACK_VERSION}`,
+      [
+        `Run \`quiet-review-axi gate ${run.name}\` to check the new pack against this replay`,
+        'Run `quiet-review-axi replay <new-name>` to test a reworked pack under a new replay name',
+      ],
+    )
+  const { context } = run
+  const userConfig = await loadUserConfig(context)
+  const provider = PROVIDERS[run.flags.provider ?? userConfig.provider ?? 'openrouter']
+  context.stderr.write(`score: scoring labelled items with ${provider.model}\n`)
+  const outcome = await scoreLabelledItems({
+    items: fromJsonl<DrawnItem>(itemsText),
+    labels: labels.labels,
+    judgeOptions: jevJudgeOptions({
+      command: 'replay',
+      context,
+      userConfig,
+      provider,
+      pack: BUILT_IN_PACK,
+      flags: run.flags,
+    }),
+  })
+  if (outcome.isStopped) {
+    run.stopped = { scored: outcome.rows.length, total: outcome.total }
+    return
+  }
+  await writeAtomic(files.scores, toJsonl(outcome.rows))
+  const costUsd = roundCost(outcome.costUsd)
+  run.manifest.stages.score = {
+    input_hash: inputHash,
+    detail: `${outcome.rows.length} items, ${outcome.calls} calls, $${costUsd}`,
+    completed_at: context.now().toISOString(),
+    counts: { items: outcome.rows.length, calls: outcome.calls, cached_calls: outcome.cachedCalls },
+    question_pack: QUESTION_PACK_VERSION,
+    provider: provider.name,
+    snapshots: outcome.snapshots,
+    cost_usd: costUsd,
+  }
+  await writeManifest(run.dir, run.manifest)
+}
+
 async function renderReplay(run: ReplayRun): Promise<string> {
   const stages = STAGES.map((stage) => {
     const record = run.manifest.stages[stage]
+    if (stage === 'score' && run.stopped)
+      return {
+        stage,
+        status: 'stopped',
+        detail: `${run.stopped.scored} of ${run.stopped.total} items scored; --max-cost ${run.flags.maxCost} reached`,
+      }
     if (record) return { stage, status: 'done', detail: record.detail }
     if (stage === 'build' && run.discovery)
       return {
@@ -192,7 +281,11 @@ async function renderReplay(run: ReplayRun): Promise<string> {
     view.rejected = rejected
       .slice(0, MAX_REJECTED_ROWS)
       .map(({ kind, candidate, reason }) => ({ kind, candidate, reason }))
-  const help = [...helpLines(run)]
+  const help = run.stopped
+    ? [
+        `Run \`quiet-review-axi replay ${run.name} --max-cost ${resumeLimit(run.flags.maxCost)}\` to resume; results already paid for are cached and cost nothing`,
+      ]
+    : [...helpLines(run)]
   if (rejected.length > MAX_REJECTED_ROWS)
     help.push(
       `Run \`cat ${relative(run.context.cwd, replayFiles(run.dir).buildLog)}\` to see all ${rejected.length} rejected candidates with their reasons`,
@@ -227,6 +320,10 @@ function helpLines(run: ReplayRun): string[] {
     return [`Run \`quiet-review-axi replay ${run.name}\` to build and label the dataset`]
   if (!run.manifest.stages.label)
     return [`Run \`quiet-review-axi replay ${run.name} --stage label\` to label the dataset`]
+  if (!run.manifest.stages.score)
+    return [
+      `Run \`quiet-review-axi replay ${run.name}\` to score the labelled items with Jev (paid; --max-cost limits the spend)`,
+    ]
   return [
     `Run \`quiet-review-axi replay ${run.name} --stage label\` to recompute the labels from the recorded evidence`,
   ]

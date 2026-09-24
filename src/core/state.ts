@@ -1,5 +1,5 @@
 import type { Item } from './items.js'
-import { itemQuestions, type Question } from './questions.js'
+import { BUILT_IN_PACK, itemQuestions, type Question, type QuestionPack } from './questions.js'
 
 export interface RequestHeader {
   repository?: string
@@ -26,24 +26,30 @@ export function estimateRequestTokens(request: JevRequest): number {
 }
 
 // Builds the Jev request(s) for one pull request or findings file (spec 5.2, 5.3): one
-// request when everything fits, otherwise the fewest file-grouped requests.
-export function buildRequests(input: { header: RequestHeader; items: Item[] }): JevRequest[] {
+// request when everything fits, otherwise the fewest file-grouped requests. The questions come
+// from the built-in pack unless another pack is given.
+export function buildRequests(input: {
+  header: RequestHeader
+  items: Item[]
+  pack?: QuestionPack
+}): JevRequest[] {
   const { header, items } = input
+  const pack = input.pack ?? BUILT_IN_PACK
   if (items.length === 0) return []
-  const whole = buildRequest(header, items)
+  const whole = buildRequest(header, items, pack)
   if (estimateRequestTokens(whole) <= REQUEST_TOKEN_BUDGET) return [whole]
   const fits = (candidate: Item[]) =>
-    estimateRequestTokens(buildRequest(header, inItemOrder(items, candidate))) <=
+    estimateRequestTokens(buildRequest(header, inItemOrder(items, candidate), pack)) <=
     REQUEST_TOKEN_BUDGET
-  const packs: Item[][] = []
+  const calls: Item[][] = []
   for (const group of fileGroups(items).flatMap((fileGroup) =>
     splitOversizedGroup(fileGroup, fits),
   )) {
-    const pack = packs.find((existing) => fits([...existing, ...group]))
-    if (pack) pack.push(...group)
-    else packs.push([...group])
+    const call = calls.find((existing) => fits([...existing, ...group]))
+    if (call) call.push(...group)
+    else calls.push([...group])
   }
-  return packs.map((pack) => buildRequest(header, inItemOrder(items, pack)))
+  return calls.map((call) => buildRequest(header, inItemOrder(items, call), pack))
 }
 
 function fileGroups(items: Item[]): Item[][] {
@@ -78,12 +84,15 @@ function compareText(a: string, b: string): number {
   return a > b ? 1 : 0
 }
 
-function buildRequest(header: RequestHeader, items: Item[]): JevRequest {
+function buildRequest(header: RequestHeader, items: Item[], pack: QuestionPack): JevRequest {
   const comments: Record<string, unknown> = {}
   let questions: Record<string, Question> = {}
   items.forEach((item, index) => {
     comments[item.key] = stateEntry(item)
-    questions = { ...questions, ...itemQuestions(item.key, duplicateCandidates(items, index)) }
+    questions = {
+      ...questions,
+      ...itemQuestions(item.key, duplicateCandidates(items, index), pack),
+    }
   })
   const state: Record<string, unknown> = {}
   if (header.repository !== undefined || header.title !== undefined) state.pr = prHeader(header)

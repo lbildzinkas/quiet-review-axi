@@ -1,4 +1,3 @@
-import { QUESTION_PACK_VERSION } from '../core/questions.js'
 import { estimateRequestTokens, type JevRequest } from '../core/state.js'
 import { QuietReviewError } from '../errors.js'
 import { createBudget } from '../infra/budget.js'
@@ -24,6 +23,8 @@ export interface RunOutcome {
 export interface RunRequestsOptions {
   command: string
   runId: string
+  // Version of the question pack the requests were built from (spec 5.4.5).
+  questionPack: string
   provider: JevProvider
   requests: JevRequest[]
   maxCostUsd: number
@@ -62,7 +63,7 @@ export async function runRequests(options: RunRequestsOptions): Promise<RunOutco
       command: options.command,
       provider: provider.name,
       model: provider.model,
-      question_pack: QUESTION_PACK_VERSION,
+      question_pack: options.questionPack,
       request_hash: key,
       items: request.itemKeys.length,
       ...(options.notice === undefined ? {} : { notice: options.notice }),

@@ -19,6 +19,11 @@ export interface StageRecord {
   // Excluded items by reason (label stage).
   excluded_by_reason?: Record<string, number>
   warnings?: string[]
+  // Scoring facts (score stage): the question pack, provider and snapshots used, and cost.
+  question_pack?: string
+  provider?: string
+  snapshots?: string[]
+  cost_usd?: number
 }
 
 export interface Manifest {
@@ -37,6 +42,7 @@ export function replayFiles(dir: string) {
     manifest: join(dir, 'manifest.json'),
     items: join(dir, 'items.jsonl'),
     labels: join(dir, 'labels.jsonl'),
+    scores: join(dir, 'scores.jsonl'),
     buildLog: join(dir, 'build-log.jsonl'),
     candidates: join(dir, 'candidates.jsonl'),
     github: join(dir, 'github'),
