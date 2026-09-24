@@ -120,8 +120,10 @@ user_config: /home/you/.config/quiet-review-axi/config.json
 `quiet-review-axi replay <name>` measures how well Jev's scores separate useful review comments from noise, on public pull requests:
 
 1. `build` and `label` collect bot review comments and label each one `real` (mainly: the lines it pointed at changed before the pull request merged) or `noise` (they did not change). Comments with unclear evidence are excluded.
-2. `score` asks Jev for each comment's `worth`.
-3. `evaluate` tries every collapse cut-off from 0.01 to 0.99. It picks the one that collapses the most noise while hiding at most 5% of the real comments.
+2. `check` asks an AI model to label a random sample of the same comments, and you review the ones where it disagrees with the automatic label.
+   If the AI agrees with fewer than 80% of the automatic labels, or your review overturns more than 20% of the ones you reviewed, the labels are not trusted and the replay's verdict is `inconclusive` instead of pass or fail.
+3. `score` asks Jev for each comment's `worth`.
+4. `evaluate` tries every collapse cut-off from 0.01 to 0.99. It picks the one that collapses the most noise while hiding at most 5% of the real comments.
 
 When the replay passes its fixed rule (AUROC of at least 0.75, and at least 40% of noise collapsed with at most 5% of real comments hidden), `evaluate` writes the chosen value to the `cutoffs` object in the user config as `collapse_below`.
 `keep_at` stays 0.70 unless the chosen value is higher, in which case it is raised to match.
@@ -141,7 +143,7 @@ The write keeps every other field in the file, leaves the file readable only by 
 ```
 
 Before it replaces existing cut-offs, `evaluate` prints the old values.
-A replay that fails or cannot reach a verdict writes nothing.
+A replay that fails, is inconclusive, or cannot reach a verdict (for example while your review of the label check is unfinished) writes nothing.
 The replay tests only the collapse cut-off.
 `quiet-review-axi report` shows how often comments at or above `keep_at` were real, so you can judge the keep cut-off yourself.
 

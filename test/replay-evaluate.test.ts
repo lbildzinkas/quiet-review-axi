@@ -10,7 +10,8 @@ import type { Sandbox } from './helpers/run-cli.js'
 const SNAPSHOT = 'typesafe/jev-1.13-20260917'
 
 // Ten merged PRs with one comment each: the odd ones changed the commented lines (real),
-// the even ones did not (noise). Each body says which, so the fake Jev can score it.
+// the even ones did not (noise). Each body says which, so the fake Jev can score it, and
+// carries its comment id, so the fake label model can answer it.
 function tenPullRequests() {
   return setupReplay({
     config: { target_items: 100 },
@@ -18,7 +19,7 @@ function tenPullRequests() {
       {
         name: 'acme/widgets',
         bots: { 'coderabbitai[bot]': 10 },
-        body: ({ pr }) => `${pr % 2 === 1 ? 'Real' : 'Noise'} comment on part ${pr}`,
+        body: ({ pr, id }) => `${pr % 2 === 1 ? 'Real' : 'Noise'} comment (#${id}) on part ${pr}`,
       },
     ],
   })
@@ -196,6 +197,59 @@ function fillReview(sandbox: Sandbox, labels: Record<number, string>) {
 function prOf(commentId: number): number {
   return Math.floor((commentId % 1_000_000) / 1000)
 }
+
+// The AI calls PR 1 (automatically real) noise and is unsure about PR 2 (automatically noise).
+function twoToReview() {
+  return createFakeLabelModel({
+    answer: (id) =>
+      ({ 1: 'noise', 2: 'unsure' })[prOf(id)] ?? (prOf(id) % 2 === 1 ? 'real' : 'noise'),
+  })
+}
+
+describe('evaluate behind the label-check trust gate', () => {
+  it('gives inconclusive instead of a pass when the review overturns too many automatic labels, and writes no cut-offs', async () => {
+    const { sandbox, gitHub } = tenPullRequests()
+    const jev = jevScoring(0.9, 0.1)
+    await runReplay(['public-v1'], sandbox, gitHub, { jev, labelModel: twoToReview() })
+    // Overturns 1 of the 2 reviewed labels (0.5); the scores alone would still pass.
+    fillReview(sandbox, { 1: 'noise', 2: 'noise' })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { jev })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain(
+      'evaluate,done,"inconclusive: the review overturned 1 of 2 automatic labels (0.5), more than 0.2"',
+    )
+    expect(result.stdout).not.toContain('cutoffs_written')
+    expect(existsSync(userConfigPath(sandbox))).toBe(false)
+    const saved = JSON.parse(readFileSync(replayPath(sandbox, 'result.json'), 'utf8'))
+    expect(saved).toMatchObject({
+      verdict: 'inconclusive',
+      trust: 'inconclusive',
+      trust_reasons: ['the review overturned 1 of 2 automatic labels (0.5), more than 0.2'],
+      calibrated_cutoffs: null,
+    })
+    expect(readJsonl(replayPath(sandbox, 'runs.jsonl')).map((line) => line.verdict)).toEqual([
+      'inconclusive',
+    ])
+  })
+
+  it('refuses the pass rule while the review of the label check is unfinished', async () => {
+    const { sandbox, gitHub } = tenPullRequests()
+    const jev = jevScoring(0.9, 0.1)
+    await runReplay(['public-v1'], sandbox, gitHub, { jev, labelModel: twoToReview() })
+
+    const result = await runReplay(['public-v1', '--stage', 'evaluate'], sandbox, gitHub, { jev })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain(
+      'evaluate,done,"refused: 2 label-check items await review; label them in review.jsonl before the pass rule applies"',
+    )
+    expect(existsSync(userConfigPath(sandbox))).toBe(false)
+    const saved = JSON.parse(readFileSync(replayPath(sandbox, 'result.json'), 'utf8'))
+    expect(saved).toMatchObject({ verdict: 'refused', trust: 'pending review' })
+  })
+})
 
 describe('evaluate on the label-check sample alone (robustness check)', () => {
   it('computes the same metrics on the sampled items, apart from the full-set verdict', async () => {

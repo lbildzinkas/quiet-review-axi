@@ -140,6 +140,27 @@ describe('report', () => {
   })
 })
 
+describe('report behind the label-check trust gate', () => {
+  it('shows an inconclusive verdict with the reasons the automatic labels are not trusted', async () => {
+    const { sandbox, gitHub, jev } = sampledReplay()
+    const labelModel = createFakeLabelModel({ answer: () => 'unsure' })
+    await runReplay(['public-v1'], sandbox, gitHub, { jev, labelModel })
+    await runReplay(['public-v1', '--stage', 'evaluate'], sandbox, gitHub, { jev })
+
+    const result = await report(['public-v1'], sandbox)
+    const json = JSON.parse((await report(['public-v1', '--json'], sandbox)).stdout)
+
+    const reason =
+      'no sampled item got a real or noise label from the AI, so agreement cannot be measured'
+    expect(result.stdout.split('\n').slice(0, 3)).toEqual([
+      'replay: public-v1',
+      'verdict: inconclusive',
+      `trust_reasons[1]: "${reason}"`,
+    ])
+    expect(json).toMatchObject({ verdict: 'inconclusive', trust_reasons: [reason] })
+  })
+})
+
 describe('report on the label-check sample alone', () => {
   it('shows the sample metrics as a robustness check next to the verdict on every item', async () => {
     const { sandbox, gitHub, jev } = sampledReplay()
