@@ -383,7 +383,7 @@ export const REPLAY_HELP = joinBlocks(
   encode({
     command: 'replay',
     usage:
-      'quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [--config <file>] [--dir <path>] [--max-cost <usd>] [--no-cache]',
+      'quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [--config <file>] [--dir <path>] [--max-cost <usd>] [--no-cache] [--json]',
     description:
       'Builds the public replay dataset, labels it, and checks a sample of the labels with an AI model and the maintainer, in resumable stages stored in a replay directory',
     stages: {
