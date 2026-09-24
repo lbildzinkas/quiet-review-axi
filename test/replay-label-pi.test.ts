@@ -2,8 +2,14 @@ import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createFakeLabelModel } from './helpers/fake-label-model.js'
-import { createFakePi, PI_MODEL, PI_VERSION, type FakePiOptions } from './helpers/fake-pi.js'
-import { readJsonl, runReplay, setupReplay } from './helpers/replay.js'
+import {
+  createFakePi,
+  PI_MODEL,
+  PI_VERSION,
+  type FakePiOptions,
+  type PiScript,
+} from './helpers/fake-pi.js'
+import { readJsonl, runReplay, setupReplay, TOKEN } from './helpers/replay.js'
 
 // The label check on a subscription (spec 10.6): the Pi coding agent CLI, already signed in to
 // the provider, answers each sampled item as a subprocess. Tests put a fake `pi` on PATH.
@@ -165,5 +171,123 @@ describe('pi calls: cache and budget', () => {
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('check,done,"4 sampled')
     expect(pi.calls()).toHaveLength(4)
+  })
+})
+
+// Every one of the 10 pull requests the bot commented on is drawn: 5 real, 5 noise.
+const ALL_TEN = { target_items: 10 }
+
+// The same script for every pull request of the replay world, whichever are sampled.
+function everyPr(script: PiScript): Record<number, PiScript> {
+  return Object.fromEntries(Array.from({ length: 10 }, (_, index) => [index + 1, script]))
+}
+
+describe('pi answers and failures', () => {
+  it('sends an unreadable answer to review as unsure', async () => {
+    const { sandbox, gitHub, pi } = setupPiReplay({
+      config: ALL_TEN,
+      pi: { byPr: { 1: 'I would say this one is fine.' } },
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { env: pi.env })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('1 await review')
+    expect(result.stdout).toContain('could not be read')
+    const review = readJsonl(replayPath(sandbox, 'review.jsonl'))
+    expect(review.map((line) => [line.pr, line.ai_label])).toEqual([[1, 'unsure']])
+  })
+
+  it('stops with a clear error when pi exits non-zero, logs it redacted, and a re-run asks only about the rest', async () => {
+    const { sandbox, gitHub, pi } = setupPiReplay({
+      config: ALL_TEN,
+      pi: {
+        byPr: { 3: { exit: 1, stderr: `Rate limit reached for ${TOKEN.GITHUB_TOKEN}\nmore` } },
+      },
+    })
+
+    const failed = await runReplay(['public-v1'], sandbox, gitHub, { env: pi.env })
+    const asked = pi.calls().length
+    pi.rescript({})
+    const resumed = await runReplay(['public-v1'], sandbox, gitHub, { env: pi.env })
+
+    expect(failed.exitCode).toBe(4)
+    expect(failed.stdout).toContain('code: PROVIDER_ERROR')
+    expect(failed.stdout).toContain('pi exited with code 1: Rate limit reached for')
+    expect(failed.stdout).not.toContain(TOKEN.GITHUB_TOKEN)
+    const errorLine = callLog(sandbox).find((line) => line.status === 'error')
+    expect(errorLine).toMatchObject({ provider: 'pi', error_code: 'PROVIDER_ERROR', cost_usd: 0 })
+    expect(String(errorLine?.error_body)).toContain('Rate limit reached')
+    for (const file of sandbox.writtenFiles())
+      expect(file.content, file.path).not.toContain(TOKEN.GITHUB_TOKEN)
+    expect(resumed.exitCode).toBe(0)
+    expect(resumed.stdout).toContain('check,done,"10 sampled')
+    expect(pi.calls().length - asked).toBe(10 - (asked - 1))
+  })
+
+  it('stops with a clear error when pi does not answer within the timeout', async () => {
+    const { sandbox, gitHub, pi } = setupPiReplay({
+      config: { ...ALL_TEN, label_check: { ...PI_CHECK, timeout_seconds: 0.5 } },
+      pi: { byPr: { 1: { sleepMs: 10_000 } } },
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { env: pi.env })
+
+    expect(result.exitCode).toBe(4)
+    expect(result.stdout).toContain('code: PROVIDER_ERROR')
+    expect(result.stdout).toContain('pi did not answer within 0.5 s')
+  })
+
+  it('stops with a clear error when the model call through pi fails, and does not cache it', async () => {
+    const { sandbox, gitHub, pi } = setupPiReplay({
+      pi: { byPr: everyPr({ stopReason: 'error', errorMessage: '429 Usage limit reached' }) },
+    })
+
+    const first = await runReplay(['public-v1'], sandbox, gitHub, { env: pi.env })
+    const again = await runReplay(['public-v1'], sandbox, gitHub, { env: pi.env })
+
+    expect(first.exitCode).toBe(4)
+    expect(first.stdout).toContain('code: PROVIDER_ERROR')
+    expect(first.stdout).toContain(
+      'The label model call through pi failed: 429 Usage limit reached',
+    )
+    expect(again.exitCode).toBe(4)
+    expect(pi.calls()).toHaveLength(2)
+  })
+
+  it('refuses output that holds no answer from the model', async () => {
+    const { sandbox, gitHub, pi } = setupPiReplay({ pi: { byPr: everyPr({ noAnswer: true }) } })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { env: pi.env })
+
+    expect(result.exitCode).toBe(4)
+    expect(result.stdout).toContain('code: INVALID_RESPONSE')
+    expect(result.stdout).toContain('no answer through pi')
+  })
+
+  it('says pi is missing when it is not on PATH', async () => {
+    const { sandbox, gitHub } = setupPiReplay()
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, {
+      env: { PATH: join(sandbox.root, 'empty-bin') },
+    })
+
+    expect(result.exitCode).toBe(4)
+    expect(result.stdout).toContain('no `pi` on PATH')
+    expect(result.stdout).toContain('Install the Pi coding agent CLI')
+  })
+})
+
+describe('check stage guidance with pi', () => {
+  it('points to the check stage without an OpenRouter key or a paid budget', async () => {
+    const { sandbox, gitHub } = setupPiReplay()
+    await runReplay(['public-v1', '--stage', 'build'], sandbox, gitHub)
+
+    const labelled = await runReplay(['public-v1', '--stage', 'label'], sandbox, gitHub)
+
+    expect(labelled.stdout).toContain(
+      `--stage check\` to check a sample of the labels with ${PI_MODEL} through pi (subscription, no per-call cost)`,
+    )
+    expect(labelled.stdout).not.toContain('OPENROUTER_API_KEY')
   })
 })

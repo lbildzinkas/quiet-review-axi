@@ -598,6 +598,11 @@ function helpLines(run: ReplayRun): string[] {
     return [
       `Run \`quiet-review-axi replay ${run.name}\` after setting \`label\` to real, noise or excluded on each line of ${relative(run.context.cwd, replayFiles(run.dir).review)}, to record the reviewed labels and evaluate`,
     ]
+  const check = run.loaded.config.label_check
+  if (!run.manifest.stages.check && check.backend === 'pi')
+    return [
+      `Run \`quiet-review-axi replay ${run.name} --stage check\` to check a sample of the labels with ${check.model} through pi (subscription, no per-call cost)`,
+    ]
   if (!run.manifest.stages.check)
     return [
       `Run \`quiet-review-axi replay ${run.name} --stage check --max-cost <usd>\` to check a sample of the labels with the label model (paid, needs OPENROUTER_API_KEY)`,
@@ -639,7 +644,7 @@ export const REPLAY_HELP = joinBlocks(
       build: 'Select repositories, bots and comments from GitHub per the replay config (read only)',
       label: 'Label every drawn comment real, noise or excluded from the recorded evidence',
       check:
-        'Ask the label model (paid, OpenRouter key) about a seeded sample, report agreement, and write the disagreements to review.jsonl for the maintainer',
+        'Ask the label model about a seeded sample, report agreement, and write the disagreements to review.jsonl for the maintainer; label_check.backend picks OpenRouter (paid, OpenRouter key) or the pi CLI (subscription, $0 per call)',
       score: 'Score every labelled comment with Jev, one request per pull request (paid)',
       evaluate:
         'Compute AUROC, the threshold sweep and 95% ranges, apply the pass rule, and on a pass write calibrated cut-offs to the user config',

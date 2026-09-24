@@ -19,6 +19,22 @@ describe('replay config', () => {
     [{ repositories: ['acme/widgets', 'acme/widgets'] }, 'must not repeat a repository'],
     [{ bots: ['coderabbitai[bot]', 'coderabbitai[bot]'] }, 'must not repeat a bot'],
     [{ name: 'other' }, 'named other'],
+    [
+      { label_check: { sample_size: 60, backend: 'pi', model: 'zai-coding-cn/glm-5.3' } },
+      'label_check.thinking is required with backend pi',
+    ],
+    [
+      { label_check: { sample_size: 60, backend: 'pi', model: 'm', thinking: 'extreme' } },
+      'label_check.thinking',
+    ],
+    [
+      { label_check: { sample_size: 60, model: 'example/label-model', thinking: 'max' } },
+      'label_check.thinking is only for backend pi',
+    ],
+    [
+      { label_check: { sample_size: 60, backend: 'claude', model: 'sonnet' } },
+      'label_check.backend',
+    ],
   ])('rejects an invalid config %j with exit 2', async (override, message) => {
     const { sandbox, gitHub } = setupReplay({ config: override })
     sandbox.write('work/replay/public-v1.config.json', JSON.stringify(config(override)))
