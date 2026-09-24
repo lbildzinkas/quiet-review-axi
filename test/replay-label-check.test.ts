@@ -503,9 +503,10 @@ describe('label-check budget (spec 9.4)', () => {
     }
   })
 
-  it('refuses an empty-string price and a variable request price as no fixed price', async () => {
+  it('refuses an empty, variable or overflowing price as no fixed price', async () => {
     const emptyPrompt = setupReplay()
     const variableRequest = setupReplay()
+    const overflowing = setupReplay()
 
     const empty = await runReplay(
       ['public-v1'],
@@ -523,8 +524,16 @@ describe('label-check budget (spec 9.4)', () => {
         models: { 'example/label-model': { prompt: '0', completion: '0.00001', request: '-1' } },
       }),
     )
+    const huge = await runReplay(
+      ['public-v1'],
+      overflowing.sandbox,
+      overflowing.gitHub,
+      createFakeLabelModel({
+        models: { 'example/label-model': { prompt: '0', completion: '9'.repeat(400) } },
+      }),
+    )
 
-    for (const result of [empty, variable]) {
+    for (const result of [empty, variable, huge]) {
       expect(result.exitCode).toBe(2)
       expect(result.stdout).toContain('code: VALIDATION_ERROR')
       expect(result.stdout).toContain('has no fixed per-token price')

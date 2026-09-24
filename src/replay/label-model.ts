@@ -193,7 +193,7 @@ async function fetchPricing(options: LabelModelOptions): Promise<Pricing> {
     if (typeof listed === 'number') return Number.isFinite(listed) && listed >= 0 ? listed : null
     if (typeof listed === 'string' && DECIMAL.test(listed.trim())) {
       const price = Number(listed)
-      return price >= 0 ? price : null
+      return Number.isFinite(price) && price >= 0 ? price : null
     }
     return null
   }
