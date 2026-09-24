@@ -33,6 +33,7 @@ export interface CheckRow {
 
 export interface CheckOptions {
   files: CheckFiles
+  sample: { size: number; seed: number }
   items: DrawnItem[]
   labels: Map<string, Label>
   // Whether the sample must be (re)labelled: false when check.jsonl matches the inputs.
@@ -156,7 +157,9 @@ async function labelSample(options: CheckOptions): Promise<CheckRow[]> {
     item,
     label: options.labels.get(item.id) ?? 'excluded',
   }))
-  const sample = drawCheckSample(labelled).sort((a, b) => compareText(a.item.id, b.item.id))
+  const sample = drawCheckSample(labelled, options.sample).sort((a, b) =>
+    compareText(a.item.id, b.item.id),
+  )
   const answers = new Map(
     (await runLabelModel({ ...options.model, sample })).map((answer) => [answer.id, answer]),
   )

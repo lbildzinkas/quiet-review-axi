@@ -1,6 +1,7 @@
 import { cleanBody } from '../core/items.js'
 import type { DrawnItem } from './build.js'
 import type { Label } from './label.js'
+import { seededRandom, shuffle } from './sample.js'
 import prompt from './label-prompt.json' with { type: 'json' }
 
 // The label check (spec 10.6): an independent AI label on a sample of the automatic labels.
@@ -14,8 +15,60 @@ export interface LabelledItem {
   label: Label
 }
 
-export function drawCheckSample(labelled: LabelledItem[]): LabelledItem[] {
-  return labelled.filter((entry) => entry.label !== 'excluded')
+// The sample (spec 10.6 step 1): `size` labelled items, half real and half noise (noise
+// takes the odd one), each half spread across bots in proportion to the bot's share of that
+// label, by largest remainder with ties to the earlier bot. A label with fewer items than its
+// half is taken whole. Within a bot, items are sorted by id, shuffled with the seeded
+// generator and drawn from the front; bots are visited in name order, real before noise.
+export function drawCheckSample(
+  labelled: LabelledItem[],
+  options: { size: number; seed: number },
+): LabelledItem[] {
+  const random = seededRandom(options.seed)
+  const realQuota = Math.floor(options.size / 2)
+  const quotas: [Label, number][] = [
+    ['real', realQuota],
+    ['noise', options.size - realQuota],
+  ]
+  return quotas.flatMap(([label, quota]) => {
+    const byBot = new Map<string, LabelledItem[]>()
+    for (const entry of labelled.filter((candidate) => candidate.label === label))
+      byBot.set(entry.item.bot, [...(byBot.get(entry.item.bot) ?? []), entry])
+    const bots = [...byBot.keys()].sort(compareText)
+    const total = bots.reduce((sum, bot) => sum + (byBot.get(bot)?.length ?? 0), 0)
+    const shares = allocate(
+      bots.map((bot) => byBot.get(bot)?.length ?? 0),
+      Math.min(quota, total),
+    )
+    return bots.flatMap((bot, index) => {
+      const members = [...(byBot.get(bot) ?? [])].sort((a, b) => compareText(a.item.id, b.item.id))
+      return shuffle(members, random).slice(0, shares[index])
+    })
+  })
+}
+
+// Splits `quota` across groups in proportion to their sizes (largest remainder). With
+// quota <= the total, no group gets more than it holds.
+function allocate(sizes: number[], quota: number): number[] {
+  const total = sizes.reduce((sum, size) => sum + size, 0)
+  if (total === 0) return sizes.map(() => 0)
+  const exact = sizes.map((size) => (quota * size) / total)
+  const shares = exact.map(Math.floor)
+  const order = exact
+    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+    .sort((a, b) => b.remainder - a.remainder || a.index - b.index)
+  let left = quota - shares.reduce((sum, share) => sum + share, 0)
+  for (const { index } of order) {
+    if (left === 0) break
+    shares[index] = (shares[index] ?? 0) + 1
+    left--
+  }
+  return shares
+}
+
+function compareText(a: string, b: string): number {
+  if (a < b) return -1
+  return a > b ? 1 : 0
 }
 
 // Lines of context around the commented range when picking the later diff's hunks to show.

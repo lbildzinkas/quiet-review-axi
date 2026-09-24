@@ -40,6 +40,67 @@ function automaticLabel(commentId: number): string {
   return prOf(commentId) % 2 === 1 ? 'real' : 'noise'
 }
 
+// Two bots on the same 10 pull requests, all 20 comments drawn. The first bot's comments led
+// to a change on PRs 1-6 and the second bot's on PRs 1-2: real 8 (6 + 2), noise 12 (4 + 8).
+function twoBots(sampleSize: number, seed = 20260923) {
+  return setupReplay({
+    config: {
+      bots: ['coderabbitai[bot]', 'cursor[bot]'],
+      target_items: 20,
+      seed,
+      label_check: { sample_size: sampleSize, model: 'example/label-model' },
+    },
+    specs: [
+      {
+        name: 'acme/widgets',
+        bots: { 'coderabbitai[bot]': 10, 'cursor[bot]': 10 },
+        changed: ({ bot, pr }) => pr <= (bot === 'cursor[bot]' ? 2 : 6),
+      },
+    ],
+  })
+}
+
+function sampledBy(sandbox: { cwd: string }) {
+  const bots = new Map(
+    readJsonl(replayPath(sandbox, 'items.jsonl')).map((item) => [item.id, item.bot]),
+  )
+  const counts: Record<string, Record<string, number>> = {}
+  for (const row of readJsonl(replayPath(sandbox, 'check.jsonl'))) {
+    const bot = String(bots.get(row.id))
+    const label = String(row.automatic_label)
+    counts[bot] = { ...counts[bot], [label]: (counts[bot]?.[label] ?? 0) + 1 }
+  }
+  return counts
+}
+
+describe('label-check sample (spec 10.6 step 1)', () => {
+  it('draws half real and half noise, each half spread across bots in proportion', async () => {
+    const { sandbox, gitHub } = twoBots(8)
+
+    await runReplay(['public-v1'], sandbox, gitHub)
+
+    expect(sampledBy(sandbox)).toEqual({
+      'coderabbitai[bot]': { real: 3, noise: 1 },
+      'cursor[bot]': { real: 1, noise: 3 },
+    })
+  })
+
+  it('draws the same sample for the same seed and another for another seed', async () => {
+    const first = twoBots(4)
+    const again = twoBots(4)
+    const other = twoBots(4, 7)
+
+    for (const { sandbox, gitHub } of [first, again, other])
+      await runReplay(['public-v1'], sandbox, gitHub)
+
+    const ids = (sandbox: { cwd: string }) =>
+      readJsonl(replayPath(sandbox, 'check.jsonl')).map((row) => row.id)
+    expect(ids(first.sandbox)).toHaveLength(4)
+    expect(ids(again.sandbox)).toEqual(ids(first.sandbox))
+    expect(ids(other.sandbox)).not.toEqual(ids(first.sandbox))
+  })
+})
+
 describe('replay label check (spec 10.6)', () => {
   it('asks the label model about the sample and reports its agreement with the automatic labels', async () => {
     const { sandbox, gitHub } = setupReplay()

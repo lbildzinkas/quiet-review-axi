@@ -187,6 +187,7 @@ async function checkStage(run: ReplayRun): Promise<void> {
   const userConfig = await loadUserConfig(context)
   const record = await runCheck({
     files,
+    sample: { size: run.loaded.config.label_check.sample_size, seed: run.loaded.config.seed },
     items: fromJsonl<DrawnItem>(itemsText),
     labels: new Map(
       fromJsonl<{ id: string; label: Label }>(labelsText).map((entry) => [entry.id, entry.label]),
