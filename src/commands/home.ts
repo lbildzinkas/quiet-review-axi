@@ -6,6 +6,7 @@ import { cacheDir, callLogPath } from '../infra/paths.js'
 import { findGitHubToken } from '../inputs/github.js'
 import { PROVIDERS } from '../jev/providers.js'
 import { roundCost } from '../output/render.js'
+import { latestResult, replaysRoot } from './report.js'
 
 // The no-command view (spec 4.3). Credentials show only their source, never their value.
 export async function homeView(context: AppContext): Promise<Record<string, unknown>> {
@@ -15,6 +16,7 @@ export async function homeView(context: AppContext): Promise<Record<string, unkn
   const key = findApiKey(provider, context.env, userConfig)
   const token = await findGitHubToken(context.env, context.runGhAuthToken)
   const cutoffs = resolveCutoffs({ repoConfig: repoConfig.cutoffs, userConfig: userConfig.cutoffs })
+  const lastReplay = await latestResult(replaysRoot(context.cwd))
   return {
     provider: provider.name,
     model: provider.model,
@@ -23,12 +25,18 @@ export async function homeView(context: AppContext): Promise<Record<string, unkn
     cutoffs: describeCutoffs(cutoffs, []).line,
     cache: `${await countCacheEntries(cacheDir(context.env))} entries`,
     spent_today_usd: roundCost(await spentOn(callLogPath(context.env), context.now())),
+    ...(lastReplay === null
+      ? {}
+      : {
+          last_replay: `${lastReplay.replay} ${lastReplay.verdict} auroc=${lastReplay.auroc === null ? 'n/a' : Number(lastReplay.auroc.toFixed(3))}`,
+        }),
   }
 }
 
 export const HOME_HELP = [
   "Run `quiet-review-axi score <pr-url>` to score a pull request's review comments",
   'Run `quiet-review-axi score --findings <file>` to score a findings file',
+  'Run `quiet-review-axi report` to see the latest replay result',
 ]
 
 async function countCacheEntries(dir: string): Promise<number> {

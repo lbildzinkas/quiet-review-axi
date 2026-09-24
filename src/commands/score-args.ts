@@ -86,7 +86,7 @@ function parseFlags(args: string[]) {
   }
 }
 
-function parseProvider(value: string | undefined): ProviderName | undefined {
+export function parseProvider(value: string | undefined): ProviderName | undefined {
   if (value === undefined || value === 'openrouter' || value === 'typesafe') return value
   throw validationError(`--provider must be openrouter or typesafe, not ${value}`)
 }
@@ -97,7 +97,7 @@ function parseAuthors(value: string | undefined): AuthorFilter {
   throw validationError(`--authors must be bots, humans or all, not ${value}`)
 }
 
-function parseNumber(flag: string, value: string | undefined): number | undefined {
+export function parseNumber(flag: string, value: string | undefined): number | undefined {
   if (value === undefined) return undefined
   const number = Number(value)
   if (value.trim() === '' || !Number.isFinite(number) || number < 0)

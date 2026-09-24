@@ -28,6 +28,8 @@ export interface DrawnItem {
   id: string
   repository: string
   pr: number
+  // The pull request's title, which goes into the Jev state as `score` sends it (spec 5.3).
+  title: string
   bot: string
   comment: {
     id: number
@@ -153,6 +155,7 @@ export async function runBuild(options: {
       id: candidate.key,
       repository: candidate.repository,
       pr: candidate.pull.number,
+      title: candidate.pull.title,
       bot: candidate.bot,
       comment: {
         id: comment.id,

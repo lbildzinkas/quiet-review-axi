@@ -1,11 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { buildWorld, config, type RepositorySpec } from '../fixtures/github/replay-world.js'
 import { createFakeGitHubReplay } from './fake-github-replay.js'
-import { createSandbox, runCli, type Sandbox } from './run-cli.js'
+import { createFakeJev } from './fake-jev.js'
+import { combineHandlers, createSandbox, runCli, type Sandbox } from './run-cli.js'
 
 export const TOKEN = { GITHUB_TOKEN: 'ghp_secret_token' }
+export const JEV_KEY = { OPENROUTER_API_KEY: 'sk-or-replay-secret' }
 
 export type FakeGitHubReplay = ReturnType<typeof createFakeGitHubReplay>
+export type FakeJev = ReturnType<typeof createFakeJev>
 
 export function readJsonl(path: string): Record<string, unknown>[] {
   return readFileSync(path, 'utf8')
@@ -28,12 +31,24 @@ export function setupReplay(
   return { sandbox, gitHub }
 }
 
-export function runReplay(argv: string[], sandbox: Sandbox, gitHub?: FakeGitHubReplay) {
+// Runs `replay` with a GitHub token and a Jev key. GitHub requests go to the fake GitHub;
+// Jev requests go to `jev` (by default a fake that answers 0.5 for every item).
+export function runReplay(
+  argv: string[],
+  sandbox: Sandbox,
+  gitHub?: FakeGitHubReplay,
+  jev: FakeJev = createFakeJev(),
+  now?: Date,
+) {
   return runCli(['replay', ...argv], {
     sandbox,
-    env: TOKEN,
-    ...(gitHub ? { fetch: gitHub.handle } : {}),
+    now,
+    env: { ...TOKEN, ...JEV_KEY },
+    fetch: combineHandlers(
+      ...(gitHub ? [{ matches: gitHub.matches, handle: gitHub.handle }] : []),
+      { matches: (url) => url.startsWith('https://openrouter.ai/'), handle: jev.handle },
+    ),
   })
 }
 
-export { createSandbox, runCli }
+export { createFakeJev, createSandbox, runCli }

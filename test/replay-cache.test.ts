@@ -7,13 +7,13 @@ describe('GitHub cache in the replay directory (spec 8.1, 9.2)', () => {
   it('rebuilds from cached GitHub responses with no network call and identical output', async () => {
     const { sandbox, gitHub } = setupReplay()
     const dir = join(sandbox.cwd, '.quiet-review', 'replays', 'public-v1')
-    const first = await runReplay(['public-v1'], sandbox, gitHub)
+    const first = await runReplay(['public-v1', '--stage', 'build'], sandbox, gitHub)
     const items = readFileSync(join(dir, 'items.jsonl'), 'utf8')
     rmSync(join(dir, 'manifest.json'))
     rmSync(join(dir, 'items.jsonl'))
     const sleeps: number[] = []
 
-    const rebuilt = await runCli(['replay', 'public-v1'], {
+    const rebuilt = await runCli(['replay', 'public-v1', '--stage', 'build'], {
       sandbox,
       env: TOKEN,
       sleep: async (ms) => void sleeps.push(ms),

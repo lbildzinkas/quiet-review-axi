@@ -1,5 +1,5 @@
-import { readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { QuietReviewError, validationError } from '../errors.js'
 import type { ProviderName } from '../jev/provider.js'
@@ -136,4 +136,24 @@ export async function configSecrets(context: ConfigContext): Promise<string[]> {
   } catch {
     return []
   }
+}
+
+// Writes calibrated cut-offs to the user config (spec 6.2), keeping every other field. The
+// file may hold keys, so it is written readable only by its owner. Returns the cut-offs it
+// replaced, so the caller can print them.
+export async function writeUserCutoffs(
+  context: ConfigContext,
+  cutoffs: NonNullable<UserConfig['cutoffs']>,
+): Promise<{ path: string; replaced: UserConfig['cutoffs'] }> {
+  const path = userConfigPath(context.env)
+  const text = await readOptional(path)
+  const current = text === null ? {} : (parseJsonFile(text, path) as Record<string, unknown>)
+  const replaced = (await loadUserConfig(context)).cutoffs
+  const next = { ...current, cutoffs }
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  const temporary = `${path}.${process.pid}.tmp`
+  await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 })
+  await chmod(temporary, 0o600)
+  await rename(temporary, path)
+  return { path, replaced }
 }
