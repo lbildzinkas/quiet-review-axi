@@ -1,0 +1,87 @@
+import { headersToRecord, jsonResponse } from './fake-jev.js'
+
+export const LABEL_MODEL = 'example/label-model'
+
+export type ScriptedAnswer = string | { status: number; body?: unknown }
+
+export interface FakeLabelModelOptions {
+  // The answer text for a comment, found by the `(#<id>)` marker the replay world puts in every
+  // comment body. Default: a `real` label.
+  answer?: (commentId: number) => ScriptedAnswer
+  // Reported `usage.cost`; `null` omits it from the response.
+  cost?: number | null
+  promptTokens?: number
+  completionTokens?: number
+  // The models the pricing list offers, with USD prices per token.
+  models?: Record<string, { prompt: string; completion: string; request?: string }>
+  snapshot?: string
+}
+
+export interface RecordedChatCall {
+  headers: Record<string, string>
+  body: string
+  json: { model: string; messages: { role: string; content: string }[] } & Record<string, unknown>
+}
+
+// A scripted stand-in for OpenRouter's model list and chat completions endpoints: the label
+// model answers each comment from a per-comment script.
+export function createFakeLabelModel(options: FakeLabelModelOptions = {}) {
+  const chatCalls: RecordedChatCall[] = []
+  const pricingCalls: string[] = []
+  const models = options.models ?? { [LABEL_MODEL]: { prompt: '0.000003', completion: '0.000015' } }
+
+  function matches(url: string) {
+    return url.startsWith('https://openrouter.ai/api/v1/')
+  }
+
+  async function handle(url: string, init: RequestInit): Promise<Response> {
+    const path = new URL(url).pathname
+    if (path === '/api/v1/models' && (init.method ?? 'GET') === 'GET') {
+      pricingCalls.push(url)
+      return jsonResponse(200, {
+        data: Object.entries(models).map(([id, pricing]) => ({
+          id,
+          pricing: { request: '0', image: '0', ...pricing },
+        })),
+      })
+    }
+    if (path !== '/api/v1/chat/completions') return jsonResponse(404, { error: { code: 404 } })
+    const body = String(init.body)
+    const json = JSON.parse(body) as RecordedChatCall['json']
+    chatCalls.push({ headers: headersToRecord(init.headers), body, json })
+    const text = json.messages.map((message) => message.content).join('\n')
+    const commentId = Number(text.match(/\(#(\d+)\)/)?.[1] ?? 0)
+    const scripted = options.answer?.(commentId) ?? 'real'
+    if (typeof scripted !== 'string')
+      return jsonResponse(scripted.status, scripted.body ?? { error: { code: scripted.status } })
+    const usage: Record<string, number> = {
+      prompt_tokens: options.promptTokens ?? Math.ceil(body.length / 4),
+      completion_tokens: options.completionTokens ?? 20,
+    }
+    usage.total_tokens = (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)
+    const cost = options.cost === undefined ? 0.002 : options.cost
+    if (cost !== null) usage.cost = cost
+    return jsonResponse(200, {
+      id: `gen-chat-${chatCalls.length}`,
+      object: 'chat.completion',
+      model: options.snapshot ?? json.model,
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'stop',
+          message: { role: 'assistant', content: labelText(scripted) },
+        },
+      ],
+      usage,
+    })
+  }
+
+  return { chatCalls, pricingCalls, matches, handle }
+}
+
+// A bare label becomes the JSON answer the prompt asks for; anything else is sent verbatim.
+function labelText(scripted: string): string {
+  if (['real', 'noise', 'unsure'].includes(scripted))
+    return JSON.stringify({ label: scripted, reason: `The evidence says ${scripted}.` })
+  return scripted
+}

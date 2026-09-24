@@ -18,6 +18,11 @@ export function cacheDir(env: Env): string {
   return join(base(env, 'XDG_CACHE_HOME', ['.cache']), 'quiet-review-axi', 'jev')
 }
 
+// The replay label model's chat responses (spec 10.6), cached like Jev responses (spec 9.2).
+export function labelCacheDir(env: Env): string {
+  return join(base(env, 'XDG_CACHE_HOME', ['.cache']), 'quiet-review-axi', 'label-check')
+}
+
 export function callLogPath(env: Env): string {
   return join(base(env, 'XDG_STATE_HOME', ['.local', 'state']), 'quiet-review-axi', 'calls.jsonl')
 }

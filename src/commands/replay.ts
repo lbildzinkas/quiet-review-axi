@@ -9,7 +9,13 @@ import { MAX_REPOSITORIES, MIN_REPOSITORIES, runBuild, type DrawnItem } from '..
 import { defaultConfigPath, loadReplayConfig, type LoadedReplayConfig } from '../replay/config.js'
 import { runDiscovery, type Discovery, type DiscoveredRepository } from '../replay/discover.js'
 import { createReplayFetch } from '../replay/fetch.js'
-import { labelComment } from '../replay/label.js'
+import { findApiKey, loadUserConfig, missingKeyError } from '../infra/config.js'
+import { openRouterProvider } from '../jev/openrouter.js'
+import { labelComment, type Label } from '../replay/label.js'
+import { agreementOf, drawCheckSample, LABEL_PROMPT_VERSION } from '../replay/label-check.js'
+import { canonicalJson } from '../infra/canonical-json.js'
+import { labelCacheDir } from '../infra/paths.js'
+import { runLabelModel } from '../replay/label-model.js'
 import type { Rejection } from '../replay/select.js'
 import {
   fromJsonl,
@@ -37,7 +43,7 @@ const REPLAY_FLAGS = {
 const MAX_REJECTED_ROWS = 20
 
 // Stages this version implements; the rest come with later milestones (spec 12).
-const AVAILABLE_STAGES: StageName[] = ['build', 'label']
+const AVAILABLE_STAGES: StageName[] = ['build', 'label', 'check']
 
 interface ReplayRun {
   name: string
@@ -75,6 +81,7 @@ export async function replayCommand(args: string[], context: AppContext): Promis
     // Without --stage, stop at the first stage that could not complete.
     if (stage === undefined && !run.manifest.stages.build) break
     if (next === 'label') await labelStage(run)
+    if (next === 'check') await checkStage(run)
   }
   return await renderReplay(run)
 }
@@ -155,6 +162,61 @@ async function labelStage(run: ReplayRun): Promise<void> {
     excluded_by_reason: excludedByReason,
   }
   await writeManifest(run.dir, run.manifest)
+}
+
+async function checkStage(run: ReplayRun): Promise<void> {
+  const files = replayFiles(run.dir)
+  const itemsText = await readOptional(files.items)
+  const labelsText = await readOptional(files.labels)
+  if (itemsText === null || labelsText === null) throw new Error('label first')
+  // The sample and the requests follow from the labels, the items and the prompt template.
+  const inputHash = hashText(
+    canonicalJson({
+      labels: hashText(labelsText),
+      items: run.manifest.stages.label?.input_hash ?? null,
+      prompt: LABEL_PROMPT_VERSION,
+    }),
+  )
+  if (run.manifest.stages.check?.input_hash === inputHash) return
+  const labelsById = new Map(
+    fromJsonl<{ id: string; label: Label }>(labelsText).map((entry) => [entry.id, entry.label]),
+  )
+  const labelled = fromJsonl<DrawnItem>(itemsText).map((item) => ({
+    item,
+    label: labelsById.get(item.id) ?? 'excluded',
+  }))
+  const sample = drawCheckSample(labelled)
+  const { context } = run
+  const userConfig = await loadUserConfig(context)
+  const answers = await runLabelModel({
+    sample,
+    model: run.loaded.config.label_check.model,
+    useCache: true,
+    cacheDir: labelCacheDir(context.env),
+    now: context.now,
+    apiKey: () => {
+      const found = findApiKey(openRouterProvider, context.env, userConfig)
+      if (!found) throw missingKeyError(openRouterProvider)
+      return found.key
+    },
+    fetch: context.fetch,
+    sleep: context.sleep,
+    random: context.random,
+  })
+  const aiById = new Map(answers.map((answer) => [answer.id, answer.label]))
+  const agreement = agreementOf(
+    sample.map((entry) => ({ automatic: entry.label, ai: aiById.get(entry.item.id) ?? 'unsure' })),
+  )
+  run.manifest.stages.check = {
+    input_hash: inputHash,
+    detail: `${sample.length} sampled, AI agreement ${formatRate(agreement.agreement)} (kappa ${formatRate(agreement.kappa)}), 0 reviewed, 0 automatic labels corrected`,
+    completed_at: context.now().toISOString(),
+  }
+  await writeManifest(run.dir, run.manifest)
+}
+
+function formatRate(value: number | null): string {
+  return value === null ? 'n/a' : String(Math.round(value * 100) / 100)
 }
 
 async function renderReplay(run: ReplayRun): Promise<string> {

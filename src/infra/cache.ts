@@ -10,24 +10,32 @@ export function cacheKey(input: { provider: string; endpoint: string; body: unkn
   return createHash('sha256').update(canonicalJson(input)).digest('hex')
 }
 
-export interface CacheEntry {
-  response: JevResponse
+// Jev responses by default; the replay's label model caches its chat responses the same way.
+export interface CacheEntry<R = JevResponse> {
+  response: R
   cachedAt: string
   latencyMs: number
   costUsd: number
   costSource: 'reported' | 'computed'
 }
 
-export async function readCacheEntry(dir: string, key: string): Promise<CacheEntry | null> {
+export async function readCacheEntry<R = JevResponse>(
+  dir: string,
+  key: string,
+): Promise<CacheEntry<R> | null> {
   try {
-    return JSON.parse(await readFile(join(dir, `${key}.json`), 'utf8')) as CacheEntry
+    return JSON.parse(await readFile(join(dir, `${key}.json`), 'utf8')) as CacheEntry<R>
   } catch {
     return null
   }
 }
 
 // Written atomically, and only for responses that passed validation (spec 5.5).
-export async function writeCacheEntry(dir: string, key: string, entry: CacheEntry): Promise<void> {
+export async function writeCacheEntry<R>(
+  dir: string,
+  key: string,
+  entry: CacheEntry<R>,
+): Promise<void> {
   await mkdir(dir, { recursive: true, mode: 0o700 })
   const path = join(dir, `${key}.json`)
   const temporary = `${path}.${process.pid}.tmp`

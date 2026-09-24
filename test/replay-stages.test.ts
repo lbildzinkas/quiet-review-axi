@@ -79,12 +79,12 @@ describe('replay directory and stages (spec 4.6, 10.9)', () => {
     const { sandbox, gitHub } = setupReplay()
 
     const all = await runReplay(['public-v1'], sandbox, gitHub)
-    const check = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
+    const score = await runReplay(['public-v1', '--stage', 'score'], sandbox, gitHub)
 
-    expect(all.stdout).toContain('check,unavailable')
+    expect(all.stdout).toContain('score,unavailable')
     expect(all.stdout).toContain('evaluate,unavailable')
-    expect(check.exitCode).toBe(2)
-    expect(check.stdout).toContain('not available in this version')
+    expect(score.exitCode).toBe(2)
+    expect(score.stdout).toContain('not available in this version')
   })
 
   it('keeps the replay in --dir and reads the config from --config', async () => {
