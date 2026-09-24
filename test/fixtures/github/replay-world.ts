@@ -36,6 +36,8 @@ export interface RepositorySpec {
   replies?: (comment: CommentContext) => { login: string; type?: string; body: string }[]
   resolved?: (comment: CommentContext) => boolean
   body?: (comment: CommentContext) => string
+  // Field overrides for a root comment, for example to drop its line anchor.
+  comment?: (comment: CommentContext) => Partial<FakeComment>
 }
 
 export const COMMENT_LINE = 10
@@ -90,7 +92,10 @@ export function buildWorld(specs: RepositorySpec[]): FakeReplayWorld {
           const id = (repositoryIndex + 1) * 1_000_000 + pr * 1000 + botIndex * 100 + index
           const context: CommentContext = { repository: spec.name, bot, pr, index, id }
           const path = `src/${bot.replace(/\W/g, '')}-${index}.ts`
-          pull.comments.push(rootComment({ id, bot, path, from, pr, index, body: spec.body }))
+          pull.comments.push({
+            ...rootComment({ id, bot, path, from, pr, index, body: spec.body }),
+            ...spec.comment?.(context),
+          })
           for (const reply of spec.replies?.(context) ?? []) {
             pull.comments.push({
               ...rootComment({ id: id + nextReply++, bot, path, from, pr, index }),

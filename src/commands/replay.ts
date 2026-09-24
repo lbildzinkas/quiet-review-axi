@@ -5,6 +5,7 @@ import { validationError } from '../errors.js'
 import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
 import { joinBlocks } from '../output/render.js'
 import { runBuild } from '../replay/build.js'
+import { createReplayFetch } from '../replay/fetch.js'
 import { defaultConfigPath, loadReplayConfig } from '../replay/config.js'
 import { labelComment } from '../replay/label.js'
 
@@ -21,7 +22,11 @@ export async function replayCommand(args: string[], context: AppContext): Promis
   const configPath = values.config ?? defaultConfigPath(context.cwd, name)
   const { config } = await loadReplayConfig(configPath, name)
   const token = await requireGitHubToken(context.env, context.runGhAuthToken)
-  const client = createGitHubClient({ token: token.token, fetch: context.fetch })
+  const client = createGitHubClient({
+    token: token.token,
+    fetch: createReplayFetch(context),
+    callerPacesSearch: true,
+  })
   const build = await runBuild({ config, client })
   const labels = build.items.map((item) => labelComment(item.evidence).label)
   const count = (label: string) => labels.filter((entry) => entry === label).length

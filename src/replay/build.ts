@@ -140,10 +140,26 @@ export async function runBuild(options: {
   return { items, summary: summarize(items) }
 }
 
+// Bot summaries and walkthroughs posted as inline comments, by their known markers.
+const SUMMARY_MARKERS = [
+  /<!--\s*walkthrough_start\s*-->/i,
+  /<!--\s*This is an auto-generated comment: summarize by coderabbit\.ai\s*-->/i,
+  /^#{1,3}\s*Walkthrough\b/im,
+  /^#{1,3}\s*Pull Request Overview\b/im,
+  /^#{1,3}\s*Greptile Summary\b/im,
+  /<h3>\s*Greptile Summary\s*<\/h3>/i,
+]
+
+// Eligibility (spec 10.4): a thread-root inline comment by a configured bot, on a PR merged
+// inside the window, with a diff hunk and a line anchor, that is not a bot summary.
 function eligibleComments(pull: ReplayPull, config: ReplayConfig): EligibleComment[] {
+  if (!isMergedInWindow(pull, config.window)) return []
   return pull.comments
     .filter((comment) => comment.in_reply_to_id === undefined || comment.in_reply_to_id === null)
     .filter((comment) => config.bots.includes(comment.user?.login ?? ''))
+    .filter((comment) => comment.diff_hunk.length > 0)
+    .filter((comment) => (comment.line ?? comment.original_line) !== null)
+    .filter((comment) => !SUMMARY_MARKERS.some((marker) => marker.test(comment.body)))
     .map((comment) => ({
       key: `${pull.repository}#${pull.number}/r${comment.id}`,
       repository: pull.repository,
@@ -152,6 +168,16 @@ function eligibleComments(pull: ReplayPull, config: ReplayConfig): EligibleComme
       pull,
       comment,
     }))
+}
+
+// The window includes merged_after and excludes merged_before (UTC days).
+function isMergedInWindow(pull: ReplayPull, window: ReplayConfig['window']): boolean {
+  if (pull.mergedAt === null) return false
+  const merged = new Date(pull.mergedAt).getTime()
+  return (
+    merged >= Date.parse(`${window.merged_after}T00:00:00Z`) &&
+    merged < Date.parse(`${window.merged_before}T00:00:00Z`)
+  )
 }
 
 // The commented range on the new side at `from`. A comment on the old side (LEFT) has none.
