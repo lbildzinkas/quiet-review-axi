@@ -1,6 +1,7 @@
 import { gitHubError, type GitHubClient } from '../inputs/github.js'
 import type { ReviewComment } from '../inputs/pull-request.js'
 import type { ReplayConfig } from './config.js'
+import type { RepositoryMeta } from './select.js'
 
 // GitHub reads for `replay build` (spec 8.1, 10.3-10.5). All read-only.
 
@@ -67,6 +68,41 @@ export async function searchMergedPulls(
       number: item.number,
       title: item.title,
     }))
+  } catch (error) {
+    throw gitHubError(error, `the search \`${q}\``)
+  }
+}
+
+// A repository's metadata (criteria 1 and 5), or null when it is missing or not visible.
+export async function fetchRepositoryMeta(
+  client: GitHubClient,
+  repository: string,
+): Promise<RepositoryMeta | null> {
+  const [owner = '', repo = ''] = repository.split('/')
+  try {
+    const { data } = await client.rest.repos.get({ owner, repo })
+    return {
+      owner: data.owner.login,
+      isPrivate: data.private,
+      isArchived: data.archived,
+      isFork: data.fork,
+    }
+  } catch (error) {
+    if (isMissing(error)) return null
+    throw gitHubError(error, repository)
+  }
+}
+
+// The number of PRs merged in the window, and the titles of up to 100 of them.
+export async function countMergedPulls(
+  client: GitHubClient,
+  repository: string,
+  window: Window,
+): Promise<{ total: number; titles: string[] }> {
+  const q = searchQuery({ window, repository })
+  try {
+    const { data } = await client.request('GET /search/issues', { q, per_page: 100 })
+    return { total: data.total_count, titles: data.items.map((item) => item.title) }
   } catch (error) {
     throw gitHubError(error, `the search \`${q}\``)
   }

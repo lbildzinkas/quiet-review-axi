@@ -16,6 +16,7 @@ export interface StageRecord {
   detail: string
   completed_at: string
   counts?: Record<string, number>
+  warnings?: string[]
 }
 
 export interface Manifest {

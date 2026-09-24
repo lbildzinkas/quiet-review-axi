@@ -69,7 +69,8 @@ describe('comment eligibility (spec 10.4)', () => {
       specs: [
         {
           name: 'acme/widgets',
-          bots: { 'coderabbitai[bot]': 10, 'greptile-apps[bot]': 10 },
+          merged: 31,
+          bots: { 'coderabbitai[bot]': 11, 'greptile-apps[bot]': 11 },
           body: ({ pr }) =>
             pr === 1
               ? '<!-- walkthrough_start -->\n## Walkthrough\nThis PR adds retries.'
@@ -89,8 +90,8 @@ describe('comment eligibility (spec 10.4)', () => {
 
     const result = await replay(['public-v1'], sandbox, gitHub)
 
-    // PRs 5-10: PR 5's comment is outdated but still anchored by its original line.
-    expect(result.stdout).toContain('build,done,"1 repos, 1 bots, 6 comments from 6 PRs"')
+    // PRs 5-11: PR 5's comment is outdated but still anchored by its original line.
+    expect(result.stdout).toContain('build,done,"1 repos, 1 bots, 7 comments from 7 PRs"')
   })
 })
 
@@ -199,7 +200,7 @@ describe('GitHub cache in the replay directory (spec 8.1, 9.2)', () => {
     expect(rebuilt.stdout).toBe(first.stdout)
   })
 
-  it('spaces out searches that reach the network', async () => {
+  it('spaces out searches that reach the network: one count and one per bot here', async () => {
     const { sandbox, gitHub } = setup({ config: { bots: ['coderabbitai[bot]', 'cursor[bot]'] } })
     const sleeps: number[] = []
 
@@ -210,7 +211,7 @@ describe('GitHub cache in the replay directory (spec 8.1, 9.2)', () => {
       sleep: async (ms) => void sleeps.push(ms),
     })
 
-    expect(sleeps).toEqual([2000])
+    expect(sleeps).toEqual([2000, 2000])
   })
 
   it('never writes the GitHub token to the replay directory', async () => {
@@ -221,5 +222,76 @@ describe('GitHub cache in the replay directory (spec 8.1, 9.2)', () => {
     const written = sandbox.writtenFiles().filter((file) => file.path.includes('.quiet-review'))
     expect(written.some((file) => file.path.includes('github'))).toBe(true)
     expect(written.filter((file) => file.content.includes(TOKEN.GITHUB_TOKEN))).toEqual([])
+  })
+})
+
+describe('repository and bot qualification (spec 10.3)', () => {
+  const BOT = 'coderabbitai[bot]'
+
+  it('rejects repositories that miss any criterion, logging each with its reason', async () => {
+    const repositories = [
+      'acme/widgets',
+      'acme/secret',
+      'acme/old',
+      'someone/widgets-fork',
+      'acme/quiet',
+      'acme/rare',
+      'acme/foreign',
+      'coderabbitai/tools',
+      'acme/missing',
+    ]
+    const { sandbox, gitHub } = setup({
+      config: { repositories, target_items: 100 },
+      specs: [
+        { name: 'acme/widgets', bots: { [BOT]: 10 } },
+        { name: 'acme/secret', bots: { [BOT]: 10 }, repository: { private: true } },
+        { name: 'acme/old', bots: { [BOT]: 10 }, repository: { archived: true } },
+        { name: 'someone/widgets-fork', bots: { [BOT]: 10 }, repository: { fork: true } },
+        { name: 'acme/quiet', merged: 29, bots: { [BOT]: 10 } },
+        { name: 'acme/rare', bots: { [BOT]: 9 } },
+        { name: 'acme/foreign', bots: { [BOT]: 10 }, title: (pr) => `修复小部件处理问题 ${pr}` },
+        { name: 'coderabbitai/tools', bots: { [BOT]: 10 } },
+      ],
+    })
+
+    const result = await replay(['public-v1'], sandbox, gitHub)
+
+    const rejected = [
+      'repository,acme/secret,private',
+      'repository,acme/old,archived',
+      'repository,someone/widgets-fork,fork',
+      'repository,acme/quiet,"29 merged PRs in the window, needs 30"',
+      'repository,acme/rare,"no listed bot left inline comments on 10 merged PRs (most: coderabbitai[bot] on 9)"',
+      'repository,acme/foreign,not mainly English',
+      'repository,coderabbitai/tools,"owned by the vendor of coderabbitai[bot]"',
+      'repository,acme/missing,not found or not visible to the token',
+    ]
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('build,done,"1 repos, 1 bots, 10 comments from 10 PRs"')
+    expect(result.stdout).toContain(
+      `rejected[8]{kind,candidate,reason}:\n${rejected.map((row) => `  ${row}`).join('\n')}`,
+    )
+    const log = readJsonl(join(sandbox.cwd, '.quiet-review/replays/public-v1/build-log.jsonl'))
+    expect(log).toHaveLength(8)
+    expect(log[0]).toEqual({ kind: 'repository', candidate: 'acme/secret', reason: 'private' })
+  })
+
+  it('rejects a listed bot that left no inline comments in the qualifying repositories', async () => {
+    const { sandbox, gitHub } = setup({ config: { bots: [BOT, 'cursor[bot]'] } })
+
+    const result = await replay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain(
+      'bot,"cursor[bot]",no inline review comments in the qualifying repositories in the window',
+    )
+  })
+
+  it('warns when the dataset covers fewer than 3 bots or 5 repositories', async () => {
+    const { sandbox, gitHub } = setup()
+
+    const result = await replay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('covers 1 bot')
+    expect(result.stdout).toContain('covers 1 repository')
   })
 })

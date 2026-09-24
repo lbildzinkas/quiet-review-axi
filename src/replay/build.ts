@@ -2,7 +2,9 @@ import type { GitHubClient } from '../inputs/github.js'
 import type { ReplayConfig } from './config.js'
 import { isBot } from '../inputs/pull-request.js'
 import {
+  countMergedPulls,
   fetchCompare,
+  fetchRepositoryMeta,
   fetchFileLines,
   fetchThreadResolution,
   fetchReplayPull,
@@ -13,6 +15,13 @@ import {
 } from './github.js'
 import { labelComment, type Evidence, type Reply } from './label.js'
 import { drawSample, type Candidate } from './sample.js'
+import {
+  botActivityRejection,
+  busyRejection,
+  languageRejection,
+  metadataRejection,
+  type Rejection,
+} from './select.js'
 
 // One drawn comment with everything the label stage needs (spec 10.4, 10.5).
 export interface DrawnItem {
@@ -42,7 +51,13 @@ export interface BuildSummary {
 export interface BuildResult {
   items: DrawnItem[]
   summary: BuildSummary
+  rejected: Rejection[]
+  warnings: string[]
 }
+
+const MIN_BOTS = 3
+const MIN_REPOSITORIES = 5
+const MAX_REPOSITORIES = 8
 
 interface EligibleComment extends Candidate {
   pull: ReplayPull
@@ -52,25 +67,33 @@ interface EligibleComment extends Candidate {
 export async function runBuild(options: {
   config: ReplayConfig
   client: GitHubClient
+  progress?: (line: string) => void
 }): Promise<BuildResult> {
   const { config, client } = options
+  const progress = options.progress ?? (() => {})
+  const rejected: Rejection[] = []
   const candidates: EligibleComment[] = []
+  const prsPerBot: Record<string, number> = Object.fromEntries(config.bots.map((bot) => [bot, 0]))
   for (const repository of config.repositories) {
-    const numbers = new Set<number>()
-    for (const bot of config.bots) {
-      const hits = await searchMergedPulls(client, {
-        window: config.window,
-        repository,
-        commenter: bot,
-      })
-      for (const hit of hits) numbers.add(hit.number)
+    progress(`build: checking ${repository}`)
+    const qualified = await qualifyRepository(client, repository, config)
+    if ('reason' in qualified) {
+      rejected.push({ kind: 'repository', candidate: repository, reason: qualified.reason })
+      continue
     }
-    for (const number of [...numbers].sort((a, b) => a - b)) {
-      const pull = await fetchReplayPull(client, repository, number)
-      candidates.push(...eligibleComments(pull, config))
-    }
+    for (const [bot, count] of Object.entries(qualified.prsPerBot))
+      prsPerBot[bot] = (prsPerBot[bot] ?? 0) + count
+    for (const pull of qualified.pulls) candidates.push(...eligibleComments(pull, config))
   }
+  for (const bot of config.bots)
+    if (prsPerBot[bot] === 0)
+      rejected.push({
+        kind: 'bot',
+        candidate: bot,
+        reason: 'no inline review comments in the qualifying repositories in the window',
+      })
   candidates.sort((a, b) => compareText(a.key, b.key))
+  progress(`build: drawing from ${candidates.length} eligible comments`)
 
   const compares = new Map<string, CompareResult | null>()
   const threads = new Map<string, Map<number, boolean>>()
@@ -137,7 +160,62 @@ export async function runBuild(options: {
       evidence: found,
     }
   })
-  return { items, summary: summarize(items) }
+  const summary = summarize(items)
+  return { items, summary, rejected, warnings: coverageWarnings(summary) }
+}
+
+type Qualification = { reason: string } | { pulls: ReplayPull[]; prsPerBot: Record<string, number> }
+
+// Applies the criteria of spec 10.3, cheapest reads first, and returns the repository's PRs
+// merged in the window that the listed bots commented on.
+async function qualifyRepository(
+  client: GitHubClient,
+  repository: string,
+  config: ReplayConfig,
+): Promise<Qualification> {
+  const metadata = metadataRejection(await fetchRepositoryMeta(client, repository), config.bots)
+  if (metadata !== null) return { reason: metadata }
+  const merged = await countMergedPulls(client, repository, config.window)
+  const quiet = busyRejection(merged.total) ?? languageRejection(merged.titles)
+  if (quiet !== null) return { reason: quiet }
+  const numbers = new Set<number>()
+  for (const bot of config.bots) {
+    const hits = await searchMergedPulls(client, {
+      window: config.window,
+      repository,
+      commenter: bot,
+    })
+    for (const hit of hits) numbers.add(hit.number)
+  }
+  const pulls: ReplayPull[] = []
+  for (const number of [...numbers].sort((a, b) => a - b)) {
+    const pull = await fetchReplayPull(client, repository, number)
+    if (isMergedInWindow(pull, config.window)) pulls.push(pull)
+  }
+  const prsPerBot = Object.fromEntries(
+    config.bots.map((bot) => [
+      bot,
+      pulls.filter((pull) => pull.comments.some((comment) => comment.user?.login === bot)).length,
+    ]),
+  )
+  const inactive = botActivityRejection(prsPerBot)
+  return inactive === null ? { pulls, prsPerBot } : { reason: inactive }
+}
+
+// R9 asks for 5-8 repositories and at least 3 bots; a smaller dataset is reported, not refused.
+function coverageWarnings(summary: BuildSummary): string[] {
+  const warnings: string[] = []
+  const counted = (count: number, one: string, many: string) =>
+    `${count} ${count === 1 ? one : many}`
+  if (summary.bots < MIN_BOTS)
+    warnings.push(
+      `the dataset covers ${counted(summary.bots, 'bot', 'bots')}; R9 asks for at least ${MIN_BOTS}`,
+    )
+  if (summary.repositories < MIN_REPOSITORIES || summary.repositories > MAX_REPOSITORIES)
+    warnings.push(
+      `the dataset covers ${counted(summary.repositories, 'repository', 'repositories')}; R9 asks for ${MIN_REPOSITORIES}-${MAX_REPOSITORIES}`,
+    )
+  return warnings
 }
 
 // Bot summaries and walkthroughs posted as inline comments, by their known markers.
@@ -153,7 +231,6 @@ const SUMMARY_MARKERS = [
 // Eligibility (spec 10.4): a thread-root inline comment by a configured bot, on a PR merged
 // inside the window, with a diff hunk and a line anchor, that is not a bot summary.
 function eligibleComments(pull: ReplayPull, config: ReplayConfig): EligibleComment[] {
-  if (!isMergedInWindow(pull, config.window)) return []
   return pull.comments
     .filter((comment) => comment.in_reply_to_id === undefined || comment.in_reply_to_id === null)
     .filter((comment) => config.bots.includes(comment.user?.login ?? ''))

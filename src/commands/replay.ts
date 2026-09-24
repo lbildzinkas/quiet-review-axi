@@ -9,6 +9,7 @@ import { runBuild, type DrawnItem } from '../replay/build.js'
 import { defaultConfigPath, loadReplayConfig, type LoadedReplayConfig } from '../replay/config.js'
 import { createReplayFetch } from '../replay/fetch.js'
 import { labelComment } from '../replay/label.js'
+import type { Rejection } from '../replay/select.js'
 import {
   fromJsonl,
   hashText,
@@ -58,7 +59,7 @@ export async function replayCommand(args: string[], context: AppContext): Promis
     if (next === 'build') await buildStage(run)
     if (next === 'label') await labelStage(run)
   }
-  return renderReplay(run)
+  return await renderReplay(run)
 }
 
 // Once `build` has run, the config is frozen: its hash was recorded (spec 4.6, 10.2).
@@ -84,9 +85,14 @@ async function buildStage(run: ReplayRun): Promise<void> {
     fetch: createReplayFetch({ ...context, cacheDir: replayFiles(run.dir).github }),
     callerPacesSearch: true,
   })
-  const build = await runBuild({ config: run.loaded.config, client })
+  const build = await runBuild({
+    config: run.loaded.config,
+    client,
+    progress: (line) => context.stderr.write(`${line}\n`),
+  })
   const files = replayFiles(run.dir)
   await writeAtomic(files.items, toJsonl(build.items))
+  await writeAtomic(files.buildLog, toJsonl(build.rejected))
   const { summary } = build
   run.manifest.config_hash = run.loaded.hash
   run.manifest.stages.build = {
@@ -94,6 +100,7 @@ async function buildStage(run: ReplayRun): Promise<void> {
     detail: `${summary.repositories} repos, ${summary.bots} bots, ${summary.comments} comments from ${summary.prs} PRs`,
     completed_at: context.now().toISOString(),
     counts: { ...summary },
+    warnings: build.warnings,
   }
   await writeManifest(run.dir, run.manifest)
 }
@@ -123,7 +130,7 @@ async function labelStage(run: ReplayRun): Promise<void> {
   await writeManifest(run.dir, run.manifest)
 }
 
-function renderReplay(run: ReplayRun): string {
+async function renderReplay(run: ReplayRun): Promise<string> {
   const stages = STAGES.map((stage) => {
     const record = run.manifest.stages[stage]
     if (record) return { stage, status: 'done', detail: record.detail }
@@ -131,16 +138,20 @@ function renderReplay(run: ReplayRun): string {
       return { stage, status: 'unavailable', detail: 'not in this version yet' }
     return { stage, status: 'pending', detail: '' }
   })
-  return joinBlocks(
-    encode({
-      replay: run.name,
-      dir: relative(run.context.cwd, run.dir) || '.',
-      config: relative(run.context.cwd, run.loaded.path),
-      config_hash: run.loaded.hash,
-      stages,
-    }),
-    renderHelp([]),
-  )
+  const view: Record<string, unknown> = {
+    replay: run.name,
+    dir: relative(run.context.cwd, run.dir) || '.',
+    config: relative(run.context.cwd, run.loaded.path),
+    config_hash: run.loaded.hash,
+    stages,
+  }
+  const warnings = run.manifest.stages.build?.warnings ?? []
+  if (warnings.length > 0) view.warnings = warnings
+  const buildLog = await readOptional(replayFiles(run.dir).buildLog)
+  const rejected = buildLog === null ? [] : fromJsonl<Rejection>(buildLog)
+  if (rejected.length > 0)
+    view.rejected = rejected.map(({ kind, candidate, reason }) => ({ kind, candidate, reason }))
+  return joinBlocks(encode(view), renderHelp([]))
 }
 
 function parseStage(value: string | undefined): StageName | undefined {
