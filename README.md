@@ -18,7 +18,7 @@ Until then, the verdict cut-offs are the generic 0.30 / 0.70 band, labelled `unc
 |---|---|
 | `quiet-review-axi score <pr-url>` | Available: scores a pull request's inline review comments (read-only on GitHub) |
 | `quiet-review-axi score --findings <file>` | Available: scores a generic findings file |
-| `quiet-review-axi replay` | Available: `build` and `label` build the public dataset and its automatic labels (read-only on GitHub, no model call); `check` asks a pinned OpenRouter chat model to label a seeded sample (paid, within `--max-cost`), reports agreement and Cohen's kappa, and writes the disagreements to `review.jsonl` for the maintainer; `score` scores the dataset with Jev; and `evaluate` applies the pass rule and, on a pass, writes calibrated cut-offs |
+| `quiet-review-axi replay` | Available: `build` and `label` build the public dataset and its automatic labels (read-only on GitHub, no model call); `check` asks a pinned chat model to label a seeded sample (through OpenRouter, paid within `--max-cost`, or through the Pi CLI on a subscription), reports agreement and Cohen's kappa, and writes the disagreements to `review.jsonl` for the maintainer; `score` scores the dataset with Jev; and `evaluate` applies the pass rule and, on a pass, writes calibrated cut-offs |
 | `quiet-review-axi report` | Available: prints the accuracy summary of an evaluated replay, with 95% ranges, and the same metrics on the label-check sample alone as a robustness check |
 | `quiet-review-axi gate` | Available: checks a reworded question pack against an evaluated replay before it is adopted |
 | `quiet-review-axi smoke` | Available: scores about 20 unmistakable comments by hand after a Jev model update |
@@ -145,6 +145,19 @@ The write keeps every other field in the file, leaves the file readable only by 
 Before it replaces existing cut-offs, `evaluate` prints the old values.
 A replay that fails, is inconclusive, or cannot reach a verdict (for example while your review of the label check is unfinished) writes nothing, and an inconclusive replay cannot serve as the baseline for `gate` either.
 The replay tests only the collapse cut-off.
+
+### Which model checks the labels
+
+The `check` stage asks a second, independent model to label a sample of 60 comments, so the maintainer only reviews the comments where it disagrees with the automatic labels.
+The replay config picks how that model is reached, in `label_check`:
+
+- **OpenRouter** (default): `{ "sample_size": 60, "model": "<OpenRouter model id>" }`. Each call is paid, needs `OPENROUTER_API_KEY`, and counts against `--max-cost`.
+- **A subscription, through the [Pi](https://github.com/earendil-works/pi) coding agent CLI**: `{ "sample_size": 60, "backend": "pi", "model": "zai-coding-cn/glm-5.3", "thinking": "max" }`. Quiet Review runs `pi` for each comment, with the fixed label prompt, no tools and no session. `pi` must be installed and already signed in to the provider; Quiet Review never reads its credentials. Calls cost $0 against `--max-cost` and need no OpenRouter key. An optional `timeout_seconds` (default 300) bounds each call.
+
+Answers are cached, so a re-run after a failure asks only about the comments still unanswered.
+A subscription is meant for modest use: the check makes about 60 calls once per dataset.
+Check that your provider's terms allow this kind of scripted use before you pick it.
+Jev scoring always goes through OpenRouter or the TypeSafe API, never through a subscription.
 `quiet-review-axi report` shows how often comments at or above `keep_at` were real, so you can judge the keep cut-off yourself.
 
 ### When to calibrate again

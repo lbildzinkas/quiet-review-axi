@@ -54,4 +54,15 @@ describe('replay config', () => {
 
     expect(result.stdout).toMatch(/config_hash: "sha256:[0-9a-f]{64}"/)
   })
+
+  it('keeps the pre-registration hash of a config that names no label backend', async () => {
+    const { sandbox, gitHub } = setupReplay()
+
+    const result = await runReplay(['public-v1', '--stage', 'build'], sandbox, gitHub)
+
+    // The hash this config had before label_check.backend existed.
+    expect(result.stdout).toContain(
+      'config_hash: "sha256:6ac81a15e398614013362aa5cc998323954d721d5732e295a0b23d27ca893ddc"',
+    )
+  })
 })
