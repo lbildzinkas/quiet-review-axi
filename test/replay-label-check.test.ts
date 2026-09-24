@@ -2,7 +2,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createFakeLabelModel } from './helpers/fake-label-model.js'
-import { LABEL_KEY, readJsonl, runReplay, setupReplay } from './helpers/replay.js'
+import { LABEL_KEY, readJsonl, runReplay, setupReplay, TOKEN } from './helpers/replay.js'
 
 // The replay world's comment ids encode their pull request: 1_000_000 + pr * 1000 + ...
 function prOf(commentId: number): number {
@@ -490,5 +490,46 @@ describe('label-model answers and failures', () => {
       ai_label: 'unsure',
       ai_reason: 'Unreadable answer: I think this one is probably fine.',
     })
+  })
+
+  it('maps a rejected key to exit 4, logs the failure, and never prints or writes the key', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    const labelModel = createFakeLabelModel({
+      answer: () => ({
+        status: 401,
+        body: { error: { message: `Invalid key ${LABEL_KEY.OPENROUTER_API_KEY}` } },
+      }),
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+
+    expect(result.exitCode).toBe(4)
+    expect(result.stdout).toContain('code: PROVIDER_AUTH')
+    expect(result.stdout).toContain('OPENROUTER_API_KEY')
+    const log = readJsonl(join(sandbox.env.XDG_STATE_HOME, 'quiet-review-axi', 'calls.jsonl'))
+    expect(log[0]).toMatchObject({ status: 'error', error_code: 'PROVIDER_AUTH', http_status: 401 })
+    const written = [result.stdout, ...sandbox.writtenFiles().map((file) => file.content)]
+    expect(written.filter((text) => text.includes(LABEL_KEY.OPENROUTER_API_KEY))).toEqual([])
+  })
+
+  it('writes neither the OpenRouter key nor the GitHub token anywhere on a full run', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+    const result = await runReplay(
+      ['public-v1'],
+      sandbox,
+      gitHub,
+      createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    )
+    fillReview(sandbox, { 1: 'real', 2: 'noise' })
+    const reviewed = await runReplay(['public-v1', '--stage', 'check', '--json'], sandbox, gitHub)
+
+    const written = [
+      result.stdout,
+      result.stderr,
+      reviewed.stdout,
+      ...sandbox.writtenFiles().map((file) => file.content),
+    ]
+    for (const secret of [LABEL_KEY.OPENROUTER_API_KEY, TOKEN.GITHUB_TOKEN])
+      expect(written.filter((text) => text.includes(secret))).toEqual([])
   })
 })
