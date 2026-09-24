@@ -11,22 +11,19 @@ export interface FinalLabel {
 // automatic labels, with the label check's final labels in their place once the maintainer's
 // review is complete. The check stage removes final-labels.jsonl whenever its review waits, so
 // the file's presence means the review is done. `text` covers both files, so a changed review
-// changes the score and evaluate stages' input hashes.
+// changes the score and evaluate stages' input hashes. `sampled` lists the label-check sample's
+// ids once the review is complete, and is null before that.
 export async function readFinalLabels(
   dir: string,
-): Promise<{ text: string; labels: FinalLabel[] } | null> {
+): Promise<{ text: string; labels: FinalLabel[]; sampled: string[] | null } | null> {
   const files = replayFiles(dir)
   const automaticText = await readOptional(files.labels)
   if (automaticText === null) return null
   const automatic = fromJsonl<FinalLabel>(automaticText)
   const checkedText = await readOptional(files.finalLabels)
-  if (checkedText === null) return { text: automaticText, labels: automatic }
-  const checked = new Map(
-    fromJsonl<{ id: string; label: Label; source: string }>(checkedText).map((entry) => [
-      entry.id,
-      entry,
-    ]),
-  )
+  if (checkedText === null) return { text: automaticText, labels: automatic, sampled: null }
+  const checkedEntries = fromJsonl<{ id: string; label: Label; source: string }>(checkedText)
+  const checked = new Map(checkedEntries.map((entry) => [entry.id, entry]))
   const labels = automatic.map((entry): FinalLabel => {
     const final = checked.get(entry.id)
     if (!final || final.label === entry.label) return entry
@@ -36,5 +33,8 @@ export async function readFinalLabels(
       reason: final.label === 'excluded' ? `${final.source} review` : null,
     }
   })
-  return { text: `${automaticText}${checkedText}`, labels }
+  const sampled = checkedEntries
+    .filter((entry) => entry.source !== 'automatic')
+    .map((entry) => entry.id)
+  return { text: `${automaticText}${checkedText}`, labels, sampled }
 }

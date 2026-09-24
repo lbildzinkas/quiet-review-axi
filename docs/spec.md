@@ -390,7 +390,7 @@ quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [-
   | `review.jsonl` | `check`, then the maintainer | the items awaiting the maintainer's review, with evidence and GitHub links; the maintainer sets `label` (10.6) |
   | `final-labels.jsonl` | `check`, once the review is complete | per item: final `label` and its `source` (`maintainer`, `agreed` or `automatic`) (10.6) |
   | `scores.jsonl` | `score` | per scored item: `id`, `snapshot`, `worth`, `category`, `severity`, `dup_of` (no comment text) |
-  | `result.json` | `evaluate` | the metrics, ranges, sweep, breakdowns and pass-rule outcome of 10.7-10.8 (aggregates only) |
+  | `result.json` | `evaluate` | the metrics, ranges, sweep, breakdowns, label-check-sample metrics and pass-rule outcome of 10.7-10.8 (aggregates only) |
   | `runs.jsonl` | `evaluate`, `gate` | one line per evaluation or gate run: kind, question pack, provider, snapshots and results (aggregates only) |
   | `gates/<pack>.json` | `gate` | the last gate run for that candidate pack version (4.8) |
 
@@ -444,6 +444,20 @@ keep_precision_ci95: 0.74-0.90
 pass_rule: "auroc >= 0.75 and exists t: noise_collapsed >= 0.40 and real_hidden <= 0.05 (judged on measured values)"
 note: "best_threshold is chosen on the same data it is measured on, so noise_collapsed and real_hidden are optimistic"
 label_check: "60 sampled, AI agreement 0.87 (kappa 0.73), 8 reviewed, 1 automatic label corrected"
+label_check_sample:
+  note: robustness check on the label-check sample alone; the verdict is judged on every item
+  items: 59
+  real: 30
+  noise: 29
+  auroc: 0.83
+  auroc_ci95: 0.72-0.93
+  best_threshold: 0.25
+  noise_collapsed: 0.55
+  noise_collapsed_ci95: 0.38-0.72
+  real_hidden: 0.033
+  real_hidden_ci95: 0-0.1
+  keep_precision: 0.86
+  keep_precision_ci95: 0.7-1
 cutoffs_written: "collapse<0.27 keep>=0.70 -> ~/.config/quiet-review-axi/config.json"
 by_bot[4]{bot,items,real,auroc}:
   coderabbitai[bot],74,28,0.79
@@ -463,6 +477,7 @@ Every rate in `report` is printed with its 95% range (D11).
 - Rates and AUROC print to three decimals, ranges as `low-high`. `best_threshold` is `t*` (10.7).
 - When the pass rule was refused (10.7), the output adds `refusal` and a `by_snapshot` table, and `model` lists every snapshot.
 - `label_check` repeats the check stage's record (10.6): `<n> sampled, AI agreement <a> (kappa <k>)`, then `<m> reviewed, <c> automatic labels corrected` (or `<p> await review` while the maintainer's review is incomplete), or `not run` when the replay has no check stage. The `replay` output (4.6) shows the same record's model, cost and trust verdict.
+- `label_check_sample` holds the same metrics, with their ranges, measured on the label-check sample alone (10.7): a robustness check that never changes the verdict. It reads `n/a until the label check review is complete` when `evaluate` ran before the review was complete (or without a check stage). `--json` carries the same block.
 - The home view (4.3) shows `last_replay` from the same result.
 
 ### 4.8 `gate` (question-pack regression gate)
@@ -1057,7 +1072,7 @@ Every rate and the AUROC are reported with a **95% range** from 2,000 seeded boo
   - label rate by category and by severity level (the severity words of 4.4);
   - duplicate rate;
   - excluded counts by reason;
-  - the same metrics on the label-check sample alone, as a robustness check (not yet implemented: `evaluate` does not compute it).
+  - the same metrics on the label-check sample alone, as a robustness check: the counts, AUROC, chosen threshold, `noise_collapsed`, `real_hidden` and keep precision, with their ranges, over the sampled items' final labels (items the review excluded drop out). They are computed only once the review is complete (null before that), with the same seed and resamples, and never change the verdict.
 - **Run facts:** returned snapshot(s), total cost, and call count.
   All scored items must share one snapshot. If they do not, `evaluate` reports per snapshot and refuses to apply the pass rule until the replay is re-scored on a single snapshot. The verdict is then `refused`; it is also `refused` when either class is empty, because AUROC is undefined.
 - **How the ranges are computed.** Percentile bootstrap: each of the 2,000 resamples draws as many items as the evaluated set, with replacement, from one generator (mulberry32) seeded with the replay config's `seed`; the range is the 2.5th to 97.5th percentile (linear interpolation) of the resampled values. `noise_collapsed` and `real_hidden` are resampled at the measured `t*`, held fixed. A resample where a value is undefined (no real items, say) is skipped for that value. The same data and seed always give the same ranges. Ranges are reported for AUROC, `noise_collapsed`, `real_hidden` and keep precision; the breakdown tables report measured values only.

@@ -296,6 +296,7 @@ async function evaluateStage(run: ReplayRun): Promise<void> {
     config: run.loaded.config,
     items: fromJsonl<DrawnItem>(itemsText),
     labels: labels.labels,
+    sampled: labels.sampled,
     scores: fromJsonl<ScoreRow>(scoresText),
     scoring: {
       question_pack: scoring.question_pack ?? '',

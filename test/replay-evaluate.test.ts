@@ -1,8 +1,10 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { QUESTION_PACK_VERSION } from '../src/core/questions.js'
 import { createFakeJev, readJsonl, runReplay, setupReplay } from './helpers/replay.js'
+import { createFakeLabelModel } from './helpers/fake-label-model.js'
+import { sampledReplay } from './helpers/scored-replay.js'
 import type { Sandbox } from './helpers/run-cli.js'
 
 const SNAPSHOT = 'typesafe/jev-1.13-20260917'
@@ -180,5 +182,83 @@ describe('replay evaluate stage', () => {
     expect(again.exitCode).toBe(0)
     expect(again.stdout).not.toContain('cutoffs_written')
     expect(readJsonl(replayPath(sandbox, 'runs.jsonl'))).toHaveLength(1)
+  })
+})
+
+// Sets the maintainer's `label` on review.jsonl lines, by pull request, as a person would.
+function fillReview(sandbox: Sandbox, labels: Record<number, string>) {
+  const path = replayPath(sandbox, 'review.jsonl')
+  const filled = readJsonl(path).map((line) => ({ ...line, label: labels[Number(line.pr)] }))
+  writeFileSync(path, filled.map((line) => `${JSON.stringify(line)}\n`).join(''))
+}
+
+// The replay world's comment ids encode their pull request: 1_000_000 + pr * 1000 + ...
+function prOf(commentId: number): number {
+  return Math.floor((commentId % 1_000_000) / 1000)
+}
+
+describe('evaluate on the label-check sample alone (robustness check)', () => {
+  it('computes the same metrics on the sampled items, apart from the full-set verdict', async () => {
+    const { sandbox, gitHub, jev } = sampledReplay()
+
+    await runReplay(['public-v1'], sandbox, gitHub, { jev })
+
+    const saved = JSON.parse(readFileSync(replayPath(sandbox, 'result.json'), 'utf8'))
+    expect(saved).toMatchObject({ verdict: 'pass', items: 10, auroc: 0.96, best_threshold: 0.31 })
+    expect(saved.label_check_sample).toEqual({
+      items: 4,
+      real: 2,
+      noise: 2,
+      auroc: 1,
+      auroc_ci95: [1, 1],
+      best_threshold: 0.31,
+      noise_collapsed: 1,
+      noise_collapsed_ci95: [1, 1],
+      real_hidden: 0,
+      real_hidden_ci95: [0, 0],
+      keep_precision: 1,
+      keep_precision_ci95: [1, 1],
+    })
+  })
+
+  it("uses the check's final labels, so a label the maintainer corrected counts as corrected", async () => {
+    const { sandbox, gitHub, jev } = sampledReplay()
+    // The AI calls sampled PR 7 (automatically real, worth 0.7) noise, and the maintainer agrees.
+    const labelModel = createFakeLabelModel({
+      answer: (id) => (prOf(id) === 7 ? 'noise' : prOf(id) % 2 === 1 ? 'real' : 'noise'),
+    })
+    await runReplay(['public-v1'], sandbox, gitHub, { jev, labelModel })
+    fillReview(sandbox, { 7: 'noise' })
+
+    await runReplay(['public-v1'], sandbox, gitHub, { jev })
+
+    // Real PR 9 (0.95) against noise PRs 2, 10 and 7 (0.1, 0.3, 0.7): 0.71 collapses all three,
+    // and of the two items at or above 0.70 only PR 9 is real.
+    const saved = JSON.parse(readFileSync(replayPath(sandbox, 'result.json'), 'utf8'))
+    expect(saved.label_check_sample).toMatchObject({
+      items: 4,
+      real: 1,
+      noise: 3,
+      auroc: 1,
+      best_threshold: 0.71,
+      noise_collapsed: 1,
+      real_hidden: 0,
+      keep_precision: 0.5,
+    })
+  })
+
+  it('has no sample metrics while the review of the label check is unfinished', async () => {
+    const { sandbox, gitHub, jev } = sampledReplay()
+    const labelModel = createFakeLabelModel({
+      answer: (id) => (prOf(id) === 7 ? 'unsure' : prOf(id) % 2 === 1 ? 'real' : 'noise'),
+    })
+    await runReplay(['public-v1'], sandbox, gitHub, { jev, labelModel })
+
+    const result = await runReplay(['public-v1', '--stage', 'evaluate'], sandbox, gitHub, { jev })
+
+    expect(result.exitCode).toBe(0)
+    const saved = JSON.parse(readFileSync(replayPath(sandbox, 'result.json'), 'utf8'))
+    expect(saved.items).toBe(10)
+    expect(saved.label_check_sample).toBeNull()
   })
 })

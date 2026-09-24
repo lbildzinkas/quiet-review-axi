@@ -19,7 +19,7 @@ Until then, the verdict cut-offs are the generic 0.30 / 0.70 band, labelled `unc
 | `quiet-review-axi score <pr-url>` | Available: scores a pull request's inline review comments (read-only on GitHub) |
 | `quiet-review-axi score --findings <file>` | Available: scores a generic findings file |
 | `quiet-review-axi replay` | Available: `build` and `label` build the public dataset and its automatic labels (read-only on GitHub, no model call); `check` asks a pinned OpenRouter chat model to label a seeded sample (paid, within `--max-cost`), reports agreement and Cohen's kappa, and writes the disagreements to `review.jsonl` for the maintainer; `score` scores the dataset with Jev; and `evaluate` applies the pass rule and, on a pass, writes calibrated cut-offs |
-| `quiet-review-axi report` | Available: prints the accuracy summary of an evaluated replay, with 95% ranges |
+| `quiet-review-axi report` | Available: prints the accuracy summary of an evaluated replay, with 95% ranges, and the same metrics on the label-check sample alone as a robustness check |
 | `quiet-review-axi gate` | Available: checks a reworded question pack against an evaluated replay before it is adopted |
 | `quiet-review-axi smoke` | Available: scores about 20 unmistakable comments by hand after a Jev model update |
 
