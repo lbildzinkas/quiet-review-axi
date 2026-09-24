@@ -40,6 +40,9 @@ describe('report', () => {
     expect(result.stdout).toContain(
       'note: "best_threshold is chosen on the same data it is measured on, so noise_collapsed and real_hidden are optimistic"',
     )
+    expect(result.stdout).toContain(
+      'label_check: "10 sampled, AI agreement 1 (kappa 1), 0 reviewed, 0 automatic labels corrected"',
+    )
     expect(result.stdout).toMatch(
       /\ncutoffs_written: collapse<0\.31 keep>=0\.70 -> \S+config\.json\n/,
     )

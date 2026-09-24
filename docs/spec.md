@@ -462,7 +462,7 @@ Every rate in `report` is printed with its 95% range (D11).
 - `report` reads the replay's `result.json`; `--dir <path>` reads another replay directory. With no name it picks the most recently evaluated replay under `.quiet-review/replays/`. A replay not yet evaluated is `VALIDATION_ERROR` (exit 2) with a help line naming the `replay` command.
 - Rates and AUROC print to three decimals, ranges as `low-high`. `best_threshold` is `t*` (10.7).
 - When the pass rule was refused (10.7), the output adds `refusal` and a `by_snapshot` table, and `model` lists every snapshot.
-- Not yet wired: `report` does not read the check stage's record (10.6) yet, so its `label_check` line still says the check was not run; the `replay` output shows the check's agreement and trust verdict until it does.
+- `label_check` repeats the check stage's record (10.6): `<n> sampled, AI agreement <a> (kappa <k>)`, then `<m> reviewed, <c> automatic labels corrected` (or `<p> await review` while the maintainer's review is incomplete), or `not run` when the replay has no check stage. The `replay` output (4.6) shows the same record's model, cost and trust verdict.
 - The home view (4.3) shows `last_replay` from the same result.
 
 ### 4.8 `gate` (question-pack regression gate)
