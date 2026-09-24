@@ -41,7 +41,7 @@ export function createFakeLabelModel(options: FakeLabelModelOptions = {}) {
       return jsonResponse(200, {
         data: Object.entries(models).map(([id, pricing]) => ({
           id,
-          pricing: { request: '0', image: '0', ...pricing },
+          pricing,
         })),
       })
     }

@@ -503,6 +503,34 @@ describe('label-check budget (spec 9.4)', () => {
     }
   })
 
+  it('refuses an empty-string price and a variable request price as no fixed price', async () => {
+    const emptyPrompt = setupReplay()
+    const variableRequest = setupReplay()
+
+    const empty = await runReplay(
+      ['public-v1'],
+      emptyPrompt.sandbox,
+      emptyPrompt.gitHub,
+      createFakeLabelModel({
+        models: { 'example/label-model': { prompt: '', completion: '0.00001' } },
+      }),
+    )
+    const variable = await runReplay(
+      ['public-v1'],
+      variableRequest.sandbox,
+      variableRequest.gitHub,
+      createFakeLabelModel({
+        models: { 'example/label-model': { prompt: '0', completion: '0.00001', request: '-1' } },
+      }),
+    )
+
+    for (const result of [empty, variable]) {
+      expect(result.exitCode).toBe(2)
+      expect(result.stdout).toContain('code: VALIDATION_ERROR')
+      expect(result.stdout).toContain('has no fixed per-token price')
+    }
+  })
+
   it('reads prices past models with a variable price, and refuses a label model without a fixed price', async () => {
     const variable = { prompt: '-1', completion: '-1' }
     const fixed = setupReplay()

@@ -174,6 +174,9 @@ const modelsSchema = z.object({
   ),
 })
 
+// What OpenRouter writes for a fixed price: a plain decimal, no exponent or unit.
+const DECIMAL = /^-?\d+(?:\.\d+)?$/
+
 async function fetchPricing(options: LabelModelOptions): Promise<Pricing> {
   const listed = await fetchModelList(options.fetch)
   const entry = listed.find((model) => model.id === options.model)
@@ -182,22 +185,28 @@ async function fetchPricing(options: LabelModelOptions): Promise<Pricing> {
       `The label model ${options.model} in label_check.model is not a model OpenRouter lists`,
       [FROZEN_CONFIG_HELP],
     )
-  // A listed price is a fixed number of USD per token; an absent field or "-1" (variable)
-  // is no fixed price, and only the request fee may default to free when the list omits it.
-  const fixed = (field: string) => {
+  // A listed price is fixed only as a number, or a non-empty string writing a plain decimal
+  // of USD, finite and non-negative; "" and "-1" (variable) are no fixed price. The request
+  // fee is not per-token but answers to the same rule, and reads as free only when omitted.
+  const fixed = (field: string): number | null => {
     const listed = entry.pricing?.[field]
-    if (listed === undefined || listed === null) return null
-    const price = Number(listed)
-    return Number.isFinite(price) && price >= 0 ? price : null
+    if (typeof listed === 'number') return Number.isFinite(listed) && listed >= 0 ? listed : null
+    if (typeof listed === 'string' && DECIMAL.test(listed.trim())) {
+      const price = Number(listed)
+      return price >= 0 ? price : null
+    }
+    return null
   }
   const prompt = fixed('prompt')
   const completion = fixed('completion')
-  if (prompt === null || completion === null)
+  const request = fixed('request')
+  const requestListed = entry.pricing?.request !== undefined
+  if (prompt === null || completion === null || (requestListed && request === null))
     throw validationError(
       `The label model ${options.model} has no fixed per-token price, so --max-cost cannot bound its calls`,
       [FROZEN_CONFIG_HELP],
     )
-  return { prompt, completion, request: fixed('request') ?? 0 }
+  return { prompt, completion, request: request ?? 0 }
 }
 
 const FROZEN_CONFIG_HELP =
