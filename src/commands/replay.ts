@@ -344,12 +344,16 @@ function helpLines(run: ReplayRun): string[] {
     return [`Run \`quiet-review-axi replay ${run.name}\` to build and label the dataset`]
   if (!run.manifest.stages.label)
     return [`Run \`quiet-review-axi replay ${run.name} --stage label\` to label the dataset`]
-  if (run.manifest.stages.check?.status === 'waiting')
+  if (!run.manifest.stages.check)
+    return [
+      `Run \`quiet-review-axi replay ${run.name} --stage check --max-cost <usd>\` to check a sample of the labels with the label model (paid, needs OPENROUTER_API_KEY)`,
+    ]
+  if (run.manifest.stages.check.status === 'waiting')
     return [
       `Run \`quiet-review-axi replay ${run.name} --stage check\` after setting \`label\` to real, noise or excluded on each line of ${relative(run.context.cwd, replayFiles(run.dir).review)}, to record the reviewed labels`,
     ]
   return [
-    `Run \`quiet-review-axi replay ${run.name} --stage label\` to recompute the labels from the recorded evidence`,
+    `Run \`quiet-review-axi replay ${run.name} --stage check\` to record a label changed in ${relative(run.context.cwd, replayFiles(run.dir).review)} after the review`,
   ]
 }
 
@@ -360,7 +364,7 @@ function parseStage(value: string | undefined): StageName | undefined {
   const stage = value as StageName
   if (!AVAILABLE_STAGES.includes(stage))
     throw validationError(`The ${stage} stage is not available in this version yet`, [
-      `Run \`quiet-review-axi replay <name>\` to run the ${AVAILABLE_STAGES.join(' and ')} stages`,
+      `Run \`quiet-review-axi replay <name>\` to run the ${AVAILABLE_STAGES.slice(0, -1).join(', ')} and ${AVAILABLE_STAGES.at(-1)} stages`,
     ])
   return stage
 }
@@ -379,13 +383,14 @@ export const REPLAY_HELP = joinBlocks(
   encode({
     command: 'replay',
     usage:
-      'quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [--config <file>] [--dir <path>]',
+      'quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [--config <file>] [--dir <path>] [--max-cost <usd>] [--no-cache]',
     description:
-      'Builds the public replay dataset and its automatic labels, in resumable stages stored in a replay directory',
+      'Builds the public replay dataset, labels it, and checks a sample of the labels with an AI model and the maintainer, in resumable stages stored in a replay directory',
     stages: {
       build: 'Select repositories, bots and comments from GitHub per the replay config (read only)',
       label: 'Label every drawn comment real, noise or excluded from the recorded evidence',
-      check: 'Not available in this version yet',
+      check:
+        'Ask the label model (paid, OpenRouter key) about a seeded sample, report agreement, and write the disagreements to review.jsonl for the maintainer',
       score: 'Not available in this version yet',
       evaluate: 'Not available in this version yet',
     },
@@ -394,11 +399,16 @@ export const REPLAY_HELP = joinBlocks(
         'Run only this stage (default: every stage not yet complete)',
       '--config <file>': 'Replay config (default: replay/<name>.config.json)',
       '--dir <path>': 'Replay directory (default: .quiet-review/replays/<name>)',
+      '--max-cost <usd>':
+        'Stop before a paid call would pass this run total (default: 0.50; 0 = cache only)',
+      '--no-cache': 'Skip cache reads and make fresh label-model calls',
       '--json': 'Emit one JSON document',
     },
-    exit_codes: '0 ok, 1 unexpected, 2 validation or changed config, 4 GitHub problem',
+    exit_codes:
+      '0 ok, 1 unexpected, 2 validation or changed config, 3 budget stop, 4 key, provider or GitHub problem',
   }),
   renderHelp([
-    'Run `quiet-review-axi replay public-v1` to build and label the replay configured in replay/public-v1.config.json',
+    'Run `quiet-review-axi replay public-v1` to build, label and check the replay configured in replay/public-v1.config.json',
+    'Run `quiet-review-axi replay public-v1 --stage check` after filling review.jsonl, to record the reviewed labels',
   ]),
 )

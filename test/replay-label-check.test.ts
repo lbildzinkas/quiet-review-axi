@@ -1,8 +1,8 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createFakeLabelModel } from './helpers/fake-label-model.js'
-import { LABEL_KEY, readJsonl, runReplay, setupReplay, TOKEN } from './helpers/replay.js'
+import { LABEL_KEY, readJsonl, runCli, runReplay, setupReplay, TOKEN } from './helpers/replay.js'
 
 // The replay world's comment ids encode their pull request: 1_000_000 + pr * 1000 + ...
 function prOf(commentId: number): number {
@@ -531,5 +531,75 @@ describe('label-model answers and failures', () => {
     ]
     for (const secret of [LABEL_KEY.OPENROUTER_API_KEY, TOKEN.GITHUB_TOKEN])
       expect(written.filter((text) => text.includes(secret))).toEqual([])
+  })
+})
+
+describe('check stage runs', () => {
+  it('refuses --stage check before the dataset is labelled', async () => {
+    const { sandbox, gitHub } = setupReplay()
+
+    const result = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toContain('The label stage of replay public-v1 has not run yet')
+    expect(result.fetchCalls).toHaveLength(0)
+  })
+
+  it('asks the label model again with --no-cache when the sample must be relabelled', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    await runReplay(['public-v1'], sandbox, gitHub)
+    rmSync(replayPath(sandbox, 'manifest.json'))
+    const labelModel = createFakeLabelModel()
+
+    await runReplay(['public-v1', '--no-cache'], sandbox, gitHub, labelModel)
+
+    expect(labelModel.chatCalls).toHaveLength(4)
+  })
+
+  it('keeps the maintainer labels when changed inputs make the sample be relabelled', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    fillReview(sandbox, { 1: 'noise' })
+    // The same items with a trailing blank line: new input hashes, the same data.
+    appendFileSync(replayPath(sandbox, 'items.jsonl'), '\n')
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('1 await review')
+    expect(readJsonl(replayPath(sandbox, 'review.jsonl')).map((line) => line.label)).toEqual([
+      'noise',
+      null,
+    ])
+  })
+
+  it('emits the label check facts in --json', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+
+    const result = await runReplay(
+      ['public-v1', '--json'],
+      sandbox,
+      gitHub,
+      createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    )
+
+    const document = JSON.parse(result.stdout) as Record<string, unknown>
+    expect(document).toMatchObject({
+      label_model: 'example/label-model',
+      label_check_cost_usd: 0.02,
+      trust: 'pending review',
+    })
+    expect(document.stages).toContainEqual({
+      stage: 'check',
+      status: 'waiting',
+      detail: '10 sampled, AI agreement 0.89 (kappa 0.78), 2 await review',
+    })
+  })
+
+  it('explains the check stage and the budget flags with --help', async () => {
+    const result = await runCli(['replay', '--help'])
+
+    expect(result.stdout).toContain('review.jsonl')
+    expect(result.stdout).toContain('--max-cost <usd>')
+    expect(result.stdout).toContain('--no-cache')
   })
 })

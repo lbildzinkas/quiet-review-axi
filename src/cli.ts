@@ -19,7 +19,7 @@ const TOP_LEVEL_HELP = `${encode({
   usage: 'quiet-review-axi <command> [args] [flags]',
   commands: {
     score: "Score a pull request's review comments, or a findings file, with Jev",
-    replay: 'Build and label the public replay dataset (accuracy experiment)',
+    replay: 'Build, label and check the public replay dataset (accuracy experiment)',
     update: 'Show how to install the latest version from the repository',
   },
 })}
