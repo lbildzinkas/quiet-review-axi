@@ -321,3 +321,47 @@ describe('repository and bot qualification (spec 10.3)', () => {
     expect(result.stdout).toContain('covers 1 repository')
   })
 })
+
+describe('candidate discovery (spec 10.3)', () => {
+  const BOT = 'coderabbitai[bot]'
+  const specs: RepositorySpec[] = [
+    { name: 'acme/widgets', bots: { [BOT]: 12, 'cursor[bot]': 10 } },
+    { name: 'acme/rare', bots: { [BOT]: 5 } },
+    { name: 'acme/old', bots: { [BOT]: 10 }, repository: { archived: true } },
+  ]
+
+  it('searches for candidates when the config lists no repositories, and builds nothing yet', async () => {
+    const { sandbox, gitHub } = setup({
+      specs,
+      config: { repositories: [], bots: [BOT, 'cursor[bot]'] },
+    })
+
+    const result = await replay(['public-v1'], sandbox, gitHub)
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain(
+      'build,waiting,1 of 3 candidates qualify; list 5-8 in the config',
+    )
+    expect(result.stdout).toContain('label,pending')
+    expect(result.stdout).toContain(
+      'candidates[1]{repository,merged_prs,bot_prs}:\n  acme/widgets,30,"coderabbitai[bot] 12, cursor[bot] 10"',
+    )
+    expect(result.stdout).toContain('repository,acme/old,archived')
+    expect(result.stdout).toContain(
+      'repository,acme/rare,"no listed bot left inline comments on 10 merged PRs (most: coderabbitai[bot] on 5)"',
+    )
+    expect(result.stdout).toContain('`repositories`')
+    expect(gitHub.requests.some((request) => request.url.includes('/pulls/'))).toBe(false)
+  })
+
+  it('builds once the chosen repositories are written into the config', async () => {
+    const { sandbox, gitHub } = setup({ specs, config: { repositories: [] } })
+    await replay(['public-v1'], sandbox, gitHub)
+    sandbox.write('work/replay/public-v1.config.json', JSON.stringify(config()))
+
+    const result = await replay(['public-v1'], sandbox, gitHub)
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('build,done,"1 repos, 1 bots, 4 comments from 4 PRs"')
+  })
+})

@@ -5,8 +5,9 @@ import type { AppContext } from '../context.js'
 import { validationError } from '../errors.js'
 import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
 import { joinBlocks, renderHelp } from '../output/render.js'
-import { runBuild, type DrawnItem } from '../replay/build.js'
+import { MAX_REPOSITORIES, MIN_REPOSITORIES, runBuild, type DrawnItem } from '../replay/build.js'
 import { defaultConfigPath, loadReplayConfig, type LoadedReplayConfig } from '../replay/config.js'
+import { runDiscovery, type Discovery, type DiscoveredRepository } from '../replay/discover.js'
 import { createReplayFetch } from '../replay/fetch.js'
 import { labelComment } from '../replay/label.js'
 import type { Rejection } from '../replay/select.js'
@@ -40,6 +41,8 @@ interface ReplayRun {
   loaded: LoadedReplayConfig
   manifest: Manifest
   context: AppContext
+  // Set when `build` searched for candidate repositories instead of building (spec 10.3).
+  discovery?: Discovery
 }
 
 export async function replayCommand(args: string[], context: AppContext): Promise<string> {
@@ -57,6 +60,8 @@ export async function replayCommand(args: string[], context: AppContext): Promis
 
   for (const next of stage === undefined ? AVAILABLE_STAGES : [stage]) {
     if (next === 'build') await buildStage(run)
+    // Without --stage, stop at the first stage that could not complete.
+    if (stage === undefined && !run.manifest.stages.build) break
     if (next === 'label') await labelStage(run)
   }
   return await renderReplay(run)
@@ -80,17 +85,23 @@ async function buildStage(run: ReplayRun): Promise<void> {
   if (record?.input_hash === run.loaded.hash) return
   const { context } = run
   const token = await requireGitHubToken(context.env, context.runGhAuthToken)
-  const client = createGitHubClient({
-    token: token.token,
-    fetch: createReplayFetch({ ...context, cacheDir: replayFiles(run.dir).github }),
-    callerPacesSearch: true,
-  })
-  const build = await runBuild({
-    config: run.loaded.config,
-    client,
-    progress: (line) => context.stderr.write(`${line}\n`),
-  })
   const files = replayFiles(run.dir)
+  const options = {
+    config: run.loaded.config,
+    client: createGitHubClient({
+      token: token.token,
+      fetch: createReplayFetch({ ...context, cacheDir: files.github }),
+      callerPacesSearch: true,
+    }),
+    progress: (line: string) => context.stderr.write(`${line}\n`),
+  }
+  if (run.loaded.config.repositories.length === 0) {
+    run.discovery = await runDiscovery(options)
+    await writeAtomic(files.candidates, toJsonl(run.discovery.candidates))
+    await writeAtomic(files.buildLog, toJsonl(run.discovery.rejected))
+    return
+  }
+  const build = await runBuild(options)
   await writeAtomic(files.items, toJsonl(build.items))
   await writeAtomic(files.buildLog, toJsonl(build.rejected))
   const { summary } = build
@@ -134,6 +145,12 @@ async function renderReplay(run: ReplayRun): Promise<string> {
   const stages = STAGES.map((stage) => {
     const record = run.manifest.stages[stage]
     if (record) return { stage, status: 'done', detail: record.detail }
+    if (stage === 'build' && run.discovery)
+      return {
+        stage,
+        status: 'waiting',
+        detail: `${run.discovery.candidates.length} of ${run.discovery.candidates.length + run.discovery.rejected.length} candidates qualify; list ${MIN_REPOSITORIES}-${MAX_REPOSITORIES} in the config`,
+      }
     if (!AVAILABLE_STAGES.includes(stage))
       return { stage, status: 'unavailable', detail: 'not in this version yet' }
     return { stage, status: 'pending', detail: '' }
@@ -147,11 +164,38 @@ async function renderReplay(run: ReplayRun): Promise<string> {
   }
   const warnings = run.manifest.stages.build?.warnings ?? []
   if (warnings.length > 0) view.warnings = warnings
+  if (run.discovery) view.candidates = run.discovery.candidates.map(candidateRow(run))
   const buildLog = await readOptional(replayFiles(run.dir).buildLog)
   const rejected = buildLog === null ? [] : fromJsonl<Rejection>(buildLog)
   if (rejected.length > 0)
     view.rejected = rejected.map(({ kind, candidate, reason }) => ({ kind, candidate, reason }))
-  return joinBlocks(encode(view), renderHelp([]))
+  return joinBlocks(encode(view), renderHelp(helpLines(run)))
+}
+
+function candidateRow(run: ReplayRun) {
+  return (candidate: DiscoveredRepository) => ({
+    repository: candidate.repository,
+    merged_prs: candidate.merged_prs,
+    bot_prs: run.loaded.config.bots
+      .filter((bot) => (candidate.bot_prs[bot] ?? 0) > 0)
+      .map((bot) => `${bot} ${candidate.bot_prs[bot]}`)
+      .join(', '),
+  })
+}
+
+function helpLines(run: ReplayRun): string[] {
+  const config = relative(run.context.cwd, run.loaded.path)
+  if (run.discovery)
+    return [
+      `Run \`quiet-review-axi replay ${run.name}\` to build the dataset after listing ${MIN_REPOSITORIES}-${MAX_REPOSITORIES} qualifying repositories that cover at least 3 bots in \`repositories\` in ${config}, and committing it`,
+    ]
+  if (!run.manifest.stages.build)
+    return [`Run \`quiet-review-axi replay ${run.name}\` to build and label the dataset`]
+  if (!run.manifest.stages.label)
+    return [`Run \`quiet-review-axi replay ${run.name} --stage label\` to label the dataset`]
+  return [
+    `Run \`quiet-review-axi replay ${run.name} --stage label\` to recompute the labels from the recorded evidence`,
+  ]
 }
 
 function parseStage(value: string | undefined): StageName | undefined {

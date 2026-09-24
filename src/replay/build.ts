@@ -56,8 +56,8 @@ export interface BuildResult {
 }
 
 const MIN_BOTS = 3
-const MIN_REPOSITORIES = 5
-const MAX_REPOSITORIES = 8
+export const MIN_REPOSITORIES = 5
+export const MAX_REPOSITORIES = 8
 
 interface EligibleComment extends Candidate {
   pull: ReplayPull
