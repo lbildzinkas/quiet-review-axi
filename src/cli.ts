@@ -5,6 +5,7 @@ import { GATE_HELP, gateCommand } from './commands/gate.js'
 import { REPLAY_HELP, replayCommand } from './commands/replay.js'
 import { REPORT_HELP, reportCommand } from './commands/report.js'
 import { SCORE_HELP, scoreCommand } from './commands/score.js'
+import { SMOKE_HELP, smokeCommand } from './commands/smoke.js'
 import { updateCommand } from './commands/update.js'
 import type { AppContext } from './context.js'
 import { BudgetStop, exitCodeFor } from './errors.js'
@@ -24,6 +25,7 @@ const TOP_LEVEL_HELP = `${encode({
     replay: 'Build, label, score and evaluate the public replay dataset (accuracy experiment)',
     report: 'Print the accuracy summary of an evaluated replay, with 95% ranges',
     gate: 'Check a new question pack against an evaluated replay (wording regression gate)',
+    smoke: 'Score the built-in smoke set of unmistakable comments by hand after a Jev model update',
     update: 'Show how to install the latest version from the repository',
   },
 })}
@@ -61,6 +63,7 @@ export async function main(context: AppContext): Promise<number> {
         replay: (args, ctx) => replayCommand(args, ctx ?? context),
         report: (args, ctx) => reportCommand(args, ctx ?? context),
         gate: (args, ctx) => gateCommand(args, ctx ?? context),
+        smoke: (args, ctx) => smokeCommand(args, ctx ?? context),
         update: (args) => updateCommand(args),
       },
       getCommandHelp: (command) => {
@@ -68,6 +71,7 @@ export async function main(context: AppContext): Promise<number> {
         if (command === 'replay') return `${REPLAY_HELP}\n`
         if (command === 'report') return `${REPORT_HELP}\n`
         if (command === 'gate') return `${GATE_HELP}\n`
+        if (command === 'smoke') return `${SMOKE_HELP}\n`
         return null
       },
       formatError: (error) => {
