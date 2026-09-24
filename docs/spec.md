@@ -462,7 +462,7 @@ Every rate in `report` is printed with its 95% range (D11).
 - `report` reads the replay's `result.json`; `--dir <path>` reads another replay directory. With no name it picks the most recently evaluated replay under `.quiet-review/replays/`. A replay not yet evaluated is `VALIDATION_ERROR` (exit 2) with a help line naming the `replay` command.
 - Rates and AUROC print to three decimals, ranges as `low-high`. `best_threshold` is `t*` (10.7).
 - When the pass rule was refused (10.7), the output adds `refusal` and a `by_snapshot` table, and `model` lists every snapshot.
-- Until the label check (M3) exists, `label_check` says it was not run.
+- Not yet wired: `report` does not read the check stage's record (10.6) yet, so its `label_check` line still says the check was not run; the `replay` output shows the check's agreement and trust verdict until it does.
 - The home view (4.3) shows `last_replay` from the same result.
 
 ### 4.8 `gate` (question-pack regression gate)
@@ -1057,7 +1057,7 @@ Every rate and the AUROC are reported with a **95% range** from 2,000 seeded boo
   - label rate by category and by severity level (the severity words of 4.4);
   - duplicate rate;
   - excluded counts by reason;
-  - the same metrics on the label-check sample alone, as a robustness check (with M3).
+  - the same metrics on the label-check sample alone, as a robustness check (not yet implemented: `evaluate` does not compute it).
 - **Run facts:** returned snapshot(s), total cost, and call count.
   All scored items must share one snapshot. If they do not, `evaluate` reports per snapshot and refuses to apply the pass rule until the replay is re-scored on a single snapshot. The verdict is then `refused`; it is also `refused` when either class is empty, because AUROC is undefined.
 - **How the ranges are computed.** Percentile bootstrap: each of the 2,000 resamples draws as many items as the evaluated set, with replacement, from one generator (mulberry32) seeded with the replay config's `seed`; the range is the 2.5th to 97.5th percentile (linear interpolation) of the resampled values. `noise_collapsed` and `real_hidden` are resampled at the measured `t*`, held fixed. A resample where a value is undefined (no real items, say) is skipped for that value. The same data and seed always give the same ranges. Ranges are reported for AUROC, `noise_collapsed`, `real_hidden` and keep precision; the breakdown tables report measured values only.
