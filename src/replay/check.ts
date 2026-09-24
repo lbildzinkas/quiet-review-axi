@@ -54,22 +54,72 @@ export async function runCheck(options: CheckOptions): Promise<Omit<StageRecord,
     return label !== undefined && label !== row.automatic_label
   })
   const summary = `${rows.length} sampled, AI agreement ${formatRate(agreement.agreement)} (kappa ${formatRate(agreement.kappa)})`
-  const completedAt = options.model.now().toISOString()
-  if (pending.length > 0)
-    return {
-      status: 'waiting',
-      detail: `${summary}, ${pending.length} await review`,
-      completed_at: completedAt,
-    }
+  const isReviewed = pending.length === 0
+  const overturnRate = isReviewed && toReview.length > 0 ? corrected.length / toReview.length : null
+  const trust = trustGate({
+    agreement: agreement.agreement,
+    isReviewed,
+    overturnRate,
+    corrected: corrected.length,
+    reviewed: toReview.length,
+  })
+  const record = {
+    completed_at: options.model.now().toISOString(),
+    counts: {
+      sampled: rows.length,
+      real: rows.filter((row) => row.automatic_label === 'real').length,
+      noise: rows.filter((row) => row.automatic_label === 'noise').length,
+      ai_unsure: rows.filter((row) => row.ai_label === 'unsure').length,
+      to_review: toReview.length,
+      reviewed: toReview.length - pending.length,
+      corrected: corrected.length,
+    },
+    label_check: {
+      agreement: agreement.agreement,
+      kappa: agreement.kappa,
+      overturn_rate: overturnRate,
+      trust: trust.verdict,
+      trust_reasons: trust.reasons,
+    },
+  }
+  if (!isReviewed)
+    return { ...record, status: 'waiting', detail: `${summary}, ${pending.length} await review` }
   await writeAtomic(
     options.files.finalLabels,
     toJsonl(finalLabels(options.labels, rows, maintainer)),
   )
-  const reviewed = toReview.length
   return {
-    detail: `${summary}, ${reviewed} reviewed, ${corrected.length} automatic ${corrected.length === 1 ? 'label' : 'labels'} corrected`,
-    completed_at: completedAt,
+    ...record,
+    detail: `${summary}, ${toReview.length} reviewed, ${corrected.length} automatic ${corrected.length === 1 ? 'label' : 'labels'} corrected`,
   }
+}
+
+// Trust gate (spec 10.6 step 6, proposed thresholds): the automatic labels are unreliable, and
+// the replay result inconclusive, when the AI agrees with fewer than 80% of them or the
+// maintainer overturns more than 20% of those reviewed.
+const MIN_AGREEMENT = 0.8
+const MAX_OVERTURN_RATE = 0.2
+
+export type TrustVerdict = 'ok' | 'inconclusive' | 'pending review'
+
+function trustGate(facts: {
+  agreement: number | null
+  isReviewed: boolean
+  overturnRate: number | null
+  corrected: number
+  reviewed: number
+}): { verdict: TrustVerdict; reasons: string[] } {
+  const reasons: string[] = []
+  if (facts.agreement === null)
+    reasons.push('the AI answered unsure on every sampled item, so agreement cannot be measured')
+  else if (facts.agreement < MIN_AGREEMENT)
+    reasons.push(`AI agreement ${formatRate(facts.agreement)} is below ${MIN_AGREEMENT}`)
+  if (facts.overturnRate !== null && facts.overturnRate > MAX_OVERTURN_RATE)
+    reasons.push(
+      `the review overturned ${facts.corrected} of ${facts.reviewed} automatic labels (${formatRate(facts.overturnRate)}), more than ${MAX_OVERTURN_RATE}`,
+    )
+  if (reasons.length > 0) return { verdict: 'inconclusive', reasons }
+  return { verdict: facts.isReviewed ? 'ok' : 'pending review', reasons }
 }
 
 // Final labels (spec 10.6 step 5): the maintainer's label for a reviewed item, the agreed

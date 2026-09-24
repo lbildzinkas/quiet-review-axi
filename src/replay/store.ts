@@ -22,6 +22,14 @@ export interface StageRecord {
   // Excluded items by reason (label stage).
   excluded_by_reason?: Record<string, number>
   warnings?: string[]
+  // Agreement figures and the trust gate (check stage, spec 10.6).
+  label_check?: {
+    agreement: number | null
+    kappa: number | null
+    overturn_rate: number | null
+    trust: 'ok' | 'inconclusive' | 'pending review'
+    trust_reasons: string[]
+  }
 }
 
 export interface Manifest {

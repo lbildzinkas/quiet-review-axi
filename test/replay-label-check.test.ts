@@ -34,6 +34,10 @@ function fillReview(sandbox: { cwd: string }, labels: Record<number, string>) {
 // PR 1 (automatic real) is labelled noise by the AI, PR 2 (automatic noise) unsure.
 const TWO_TO_REVIEW = (id: number) => ({ 1: 'noise', 2: 'unsure' })[prOf(id)] ?? automaticLabel(id)
 
+function flip(commentId: number): string {
+  return automaticLabel(commentId) === 'real' ? 'noise' : 'real'
+}
+
 // By default the world changes the commented lines on odd pull requests, so the automatic
 // label is `real` there and `noise` elsewhere.
 function automaticLabel(commentId: number): string {
@@ -215,5 +219,51 @@ describe('replay label check (spec 10.6)', () => {
       label: 'excluded',
       source: 'maintainer',
     })
+  })
+})
+
+describe('label-check trust gate (spec 10.6 step 6)', () => {
+  it('reports inconclusive as soon as the AI agrees with fewer than 80% of the automatic labels', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+    const labelModel = createFakeLabelModel({
+      answer: (id) => (prOf(id) <= 3 ? 'unsure' : prOf(id) <= 6 ? flip(id) : automaticLabel(id)),
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+
+    expect(result.stdout).toContain(
+      'check,waiting,"10 sampled, AI agreement 0.57 (kappa 0.16), 6 await review"',
+    )
+    expect(result.stdout).toContain('trust: inconclusive')
+    expect(result.stdout).toContain('AI agreement 0.57 is below 0.8')
+  })
+
+  it('waits for the review before trusting the labels, then trusts them when few are overturned', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+    const waiting = await runReplay(
+      ['public-v1'],
+      sandbox,
+      gitHub,
+      createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    )
+    fillReview(sandbox, { 1: 'real', 2: 'noise' })
+
+    const reviewed = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
+
+    expect(waiting.stdout).toContain('trust: pending review')
+    expect(reviewed.stdout).toContain('trust: ok')
+  })
+
+  it('reports inconclusive when the maintainer overturns more than 20% of the labels reviewed', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    fillReview(sandbox, { 1: 'noise', 2: 'noise' })
+
+    const result = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('trust: inconclusive')
+    expect(result.stdout).toContain(
+      'the review overturned 1 of 2 automatic labels (0.5), more than 0.2',
+    )
   })
 })

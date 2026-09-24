@@ -241,6 +241,11 @@ async function renderReplay(run: ReplayRun): Promise<string> {
     config_hash: run.loaded.hash,
     stages,
   }
+  const labelCheck = run.manifest.stages.check?.label_check
+  if (labelCheck) {
+    view.trust = labelCheck.trust
+    if (labelCheck.trust_reasons.length > 0) view.trust_reasons = labelCheck.trust_reasons
+  }
   const warnings = run.manifest.stages.build?.warnings ?? []
   if (warnings.length > 0) view.warnings = warnings
   const excluded = Object.entries(run.manifest.stages.label?.excluded_by_reason ?? {})
