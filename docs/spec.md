@@ -379,7 +379,7 @@ quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [-
   | `items.jsonl` | `build` | every drawn comment, labelled or excluded, with its label evidence (10.5) |
   | `labels.jsonl` | `label` | per item: `label`, exclusion `reason`, and the `changed`, `resolved`, `agree`, `disagree` signals |
 
-- The output adds `excluded[n]{reason,count}` once `label` has run, `rejected[n]{kind,candidate,reason}` for rejected repositories and bots, and a `warnings` line when the dataset covers fewer than 3 bots or a repository count outside 5-8 (R9).
+- The output adds `excluded[n]{reason,count}` once `label` has run, `rejected[n]{kind,candidate,reason}` for rejected repositories and bots (the first 20, with `rejected_total` and a help line pointing to `build-log.jsonl` when there are more), and a `warnings` line when the dataset covers fewer than 3 bots or a repository count outside 5-8 (R9).
 - `--max-cost` applies to the whole invocation, across the `check` and `score` stages.
 
 Example:

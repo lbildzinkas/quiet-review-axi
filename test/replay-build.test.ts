@@ -478,3 +478,23 @@ describe('label evidence read from GitHub (spec 10.5)', () => {
     expect(result.stdout).toContain('label,done,"real 2, noise 8, excluded 0"')
   })
 })
+
+describe('long rejection lists', () => {
+  it('prints the first 20 rejections and points to the build log for the rest', async () => {
+    const specs: RepositorySpec[] = Array.from({ length: 25 }, (_, index) => ({
+      name: `acme/tiny-${String(index).padStart(2, '0')}`,
+      bots: { 'coderabbitai[bot]': 2 },
+    }))
+    const { sandbox, gitHub } = setup({ specs, config: { repositories: [] } })
+
+    const result = await replay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('rejected_total: 25')
+    expect(result.stdout).toContain('rejected[20]{kind,candidate,reason}:')
+    expect(result.stdout).toContain('acme/tiny-19')
+    expect(result.stdout).not.toContain('acme/tiny-20')
+    expect(result.stdout).toContain('.quiet-review/replays/public-v1/build-log.jsonl')
+    const log = readJsonl(join(sandbox.cwd, '.quiet-review/replays/public-v1/build-log.jsonl'))
+    expect(log).toHaveLength(25)
+  })
+})

@@ -33,6 +33,9 @@ const REPLAY_FLAGS = {
   json: { type: 'boolean' },
 } as const
 
+// Longer rejection lists (common in discovery) are cut in the output; the build log has all.
+const MAX_REJECTED_ROWS = 20
+
 // Stages this version implements; the rest come with later milestones (spec 12).
 const AVAILABLE_STAGES: StageName[] = ['build', 'label']
 
@@ -184,10 +187,18 @@ async function renderReplay(run: ReplayRun): Promise<string> {
   if (run.discovery) view.candidates = run.discovery.candidates.map(candidateRow(run))
   const buildLog = await readOptional(replayFiles(run.dir).buildLog)
   const rejected = buildLog === null ? [] : fromJsonl<Rejection>(buildLog)
+  if (rejected.length > MAX_REJECTED_ROWS) view.rejected_total = rejected.length
   if (rejected.length > 0)
-    view.rejected = rejected.map(({ kind, candidate, reason }) => ({ kind, candidate, reason }))
-  if (run.asJson) return JSON.stringify({ ...view, help: helpLines(run) }, null, 2)
-  return joinBlocks(encode(view), renderHelp(helpLines(run)))
+    view.rejected = rejected
+      .slice(0, MAX_REJECTED_ROWS)
+      .map(({ kind, candidate, reason }) => ({ kind, candidate, reason }))
+  const help = [...helpLines(run)]
+  if (rejected.length > MAX_REJECTED_ROWS)
+    help.push(
+      `Run \`cat ${relative(run.context.cwd, replayFiles(run.dir).buildLog)}\` to see all ${rejected.length} rejected candidates with their reasons`,
+    )
+  if (run.asJson) return JSON.stringify({ ...view, help }, null, 2)
+  return joinBlocks(encode(view), renderHelp(help))
 }
 
 function compareText(a: string, b: string): number {
