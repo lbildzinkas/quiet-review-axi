@@ -4,7 +4,8 @@ import { encode } from '@toon-format/toon'
 import type { AppContext } from '../context.js'
 import { QUESTION_PACK_VERSION, BUILT_IN_PACK } from '../core/questions.js'
 import { BudgetStop, validationError } from '../errors.js'
-import { loadUserConfig } from '../infra/config.js'
+import { formatCutoff, type UserConfigCutoffs } from '../core/cutoffs.js'
+import { loadUserConfig, writeUserCutoffs } from '../infra/config.js'
 import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
 import { PROVIDERS } from '../jev/providers.js'
 import { joinBlocks, renderHelp, resumeLimit, roundCost } from '../output/render.js'
@@ -12,11 +13,13 @@ import { MAX_REPOSITORIES, MIN_REPOSITORIES, runBuild, type DrawnItem } from '..
 import { defaultConfigPath, loadReplayConfig, type LoadedReplayConfig } from '../replay/config.js'
 import { runDiscovery, type Discovery, type DiscoveredRepository } from '../replay/discover.js'
 import { createReplayFetch } from '../replay/fetch.js'
+import { evaluateReplay, type ReplayResult } from '../replay/evaluate.js'
 import { readFinalLabels } from '../replay/final-labels.js'
 import { labelComment } from '../replay/label.js'
-import { scoreLabelledItems } from '../replay/score.js'
+import { scoreLabelledItems, type ScoreRow } from '../replay/score.js'
 import type { Rejection } from '../replay/select.js'
 import {
+  appendJsonl,
   fromJsonl,
   hashText,
   readManifest,
@@ -47,7 +50,7 @@ const REPLAY_FLAGS = {
 const MAX_REJECTED_ROWS = 20
 
 // Stages this version implements; the rest come with later milestones (spec 12).
-const AVAILABLE_STAGES: StageName[] = ['build', 'label', 'score']
+const AVAILABLE_STAGES: StageName[] = ['build', 'label', 'score', 'evaluate']
 
 interface ReplayRun {
   name: string
@@ -61,6 +64,8 @@ interface ReplayRun {
   discovery?: Discovery
   // Set when `score` stopped at --max-cost (spec 9.4).
   stopped?: { scored: number; total: number }
+  // Set when this run's `evaluate` wrote calibrated cut-offs to the user config (spec 6.2).
+  cutoffsWritten?: { written: string; replaced: string | null }
 }
 
 interface ReplayFlags {
@@ -98,6 +103,7 @@ export async function replayCommand(args: string[], context: AppContext): Promis
     if (next === 'build') await buildStage(run)
     if (next === 'label') await labelStage(run)
     if (next === 'score') await scoreStage(run)
+    if (next === 'evaluate') await evaluateStage(run)
     // Without --stage, stop at the first stage that could not complete.
     if (stage === undefined && !run.manifest.stages[next]) break
   }
@@ -240,6 +246,109 @@ async function scoreStage(run: ReplayRun): Promise<void> {
   await writeManifest(run.dir, run.manifest)
 }
 
+// Computes the metrics and applies the pass rule (spec 10.7, 10.8); on a pass, writes the
+// calibrated cut-offs to the user config (spec 6.2). Every evaluation is logged.
+async function evaluateStage(run: ReplayRun): Promise<void> {
+  const files = replayFiles(run.dir)
+  const scoring = run.manifest.stages.score
+  const scoresText = scoring ? await readOptional(files.scores) : null
+  const itemsText = await readOptional(files.items)
+  const labels = await readFinalLabels(run.dir)
+  if (!scoring || scoresText === null || itemsText === null || labels === null)
+    throw validationError(`The score stage of replay ${run.name} has not run yet`, [
+      `Run \`quiet-review-axi replay ${run.name} --stage score\` first`,
+    ])
+  const inputHash = hashText(
+    [itemsText, labels.text, scoresText, run.loaded.hash].map(hashText).join('\n'),
+  )
+  if (run.manifest.stages.evaluate?.input_hash === inputHash) return
+  const { context } = run
+  const result = evaluateReplay({
+    replay: run.name,
+    config: run.loaded.config,
+    items: fromJsonl<DrawnItem>(itemsText),
+    labels: labels.labels,
+    scores: fromJsonl<ScoreRow>(scoresText),
+    scoring: {
+      question_pack: scoring.question_pack ?? '',
+      provider: scoring.provider ?? '',
+      calls: scoring.counts?.calls ?? 0,
+      cost_usd: scoring.cost_usd ?? 0,
+    },
+    excludedByReason: run.manifest.stages.label?.excluded_by_reason ?? {},
+    evaluatedAt: context.now().toISOString(),
+  })
+  const [snapshot] = result.snapshots
+  if (result.calibrated_cutoffs && result.best_threshold !== null && snapshot !== undefined) {
+    const current = (await loadUserConfig(context)).cutoffs
+    if (current?.collapse_below !== undefined || current?.keep_at !== undefined)
+      context.stderr.write(`evaluate: replacing cut-offs ${describeUserCutoffs(current)}\n`)
+    const { path } = await writeUserCutoffs(context, {
+      ...result.calibrated_cutoffs,
+      replay: run.name,
+      snapshot,
+      tested_collapse_below: result.best_threshold,
+      written_at: result.evaluated_at.slice(0, 10),
+    })
+    run.cutoffsWritten = {
+      written: `${describeUserCutoffs(result.calibrated_cutoffs, false)} -> ${path}`,
+      replaced:
+        current?.collapse_below !== undefined || current?.keep_at !== undefined
+          ? describeUserCutoffs(current)
+          : null,
+    }
+  }
+  await writeAtomic(files.result, `${JSON.stringify(result, null, 2)}\n`)
+  await appendJsonl(files.runs, runLogLine(result, 'evaluate'))
+  run.manifest.stages.evaluate = {
+    input_hash: inputHash,
+    detail: evaluateDetail(result),
+    completed_at: result.evaluated_at,
+    counts: { items: result.items, real: result.real, noise: result.noise },
+  }
+  await writeManifest(run.dir, run.manifest)
+}
+
+function evaluateDetail(result: ReplayResult): string {
+  if (result.verdict === 'refused') return `refused: ${result.refusal}`
+  const auroc = result.auroc === null ? 'n/a' : String(Number(result.auroc.toFixed(3)))
+  const threshold = result.best_threshold === null ? 'none' : String(result.best_threshold)
+  return `${result.verdict}: auroc ${auroc}, best threshold ${threshold}`
+}
+
+// One line per evaluation or gate run: the pack, the snapshots and the results, with no
+// comment text, so the log can be summarized into the committed result file.
+export function runLogLine(result: ReplayResult, kind: string) {
+  return {
+    ts: result.evaluated_at,
+    kind,
+    replay: result.replay,
+    question_pack: result.question_pack,
+    provider: result.provider,
+    snapshots: result.snapshots,
+    verdict: result.verdict,
+    items: result.items,
+    real: result.real,
+    noise: result.noise,
+    auroc: result.auroc,
+    best_threshold: result.best_threshold,
+    noise_collapsed: result.noise_collapsed,
+    real_hidden: result.real_hidden,
+    keep_precision: result.keep_precision,
+  }
+}
+
+function describeUserCutoffs(cutoffs: UserConfigCutoffs, withProvenance = true): string {
+  const parts: string[] = []
+  if (cutoffs.collapse_below !== undefined)
+    parts.push(`collapse<${formatCutoff(cutoffs.collapse_below)}`)
+  if (cutoffs.keep_at !== undefined) parts.push(`keep>=${formatCutoff(cutoffs.keep_at)}`)
+  if (!withProvenance) return parts.join(' ')
+  const provenance =
+    cutoffs.replay !== undefined ? `calibrated by replay ${cutoffs.replay}` : 'hand-set'
+  return `${parts.join(' ')} (${provenance})`
+}
+
 async function renderReplay(run: ReplayRun): Promise<string> {
   const stages = STAGES.map((stage) => {
     const record = run.manifest.stages[stage]
@@ -266,6 +375,10 @@ async function renderReplay(run: ReplayRun): Promise<string> {
     config: relative(run.context.cwd, run.loaded.path),
     config_hash: run.loaded.hash,
     stages,
+  }
+  if (run.cutoffsWritten) {
+    view.cutoffs_written = run.cutoffsWritten.written
+    if (run.cutoffsWritten.replaced !== null) view.cutoffs_replaced = run.cutoffsWritten.replaced
   }
   const warnings = run.manifest.stages.build?.warnings ?? []
   if (warnings.length > 0) view.warnings = warnings

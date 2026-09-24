@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { canonicalJson } from '../infra/canonical-json.js'
 
@@ -43,6 +43,8 @@ export function replayFiles(dir: string) {
     items: join(dir, 'items.jsonl'),
     labels: join(dir, 'labels.jsonl'),
     scores: join(dir, 'scores.jsonl'),
+    result: join(dir, 'result.json'),
+    runs: join(dir, 'runs.jsonl'),
     buildLog: join(dir, 'build-log.jsonl'),
     candidates: join(dir, 'candidates.jsonl'),
     github: join(dir, 'github'),
@@ -89,4 +91,10 @@ export async function writeAtomic(path: string, content: string): Promise<void> 
   const temporary = `${path}.${process.pid}.tmp`
   await writeFile(temporary, content, { mode: 0o600 })
   await rename(temporary, path)
+}
+
+// Appends one line to an append-only JSON Lines log, such as the replay's runs.jsonl.
+export async function appendJsonl(path: string, row: unknown): Promise<void> {
+  await mkdir(join(path, '..'), { recursive: true, mode: 0o700 })
+  await appendFile(path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
 }
