@@ -37,6 +37,52 @@ describe('home view', () => {
     expect(configured.stdout).toContain('github_token: set (gh auth token)')
   })
 
+  it('shows which file each cut-off comes from and warns when collapse is above the tested value', async () => {
+    const sandbox = createSandbox()
+    const repoPath = sandbox.write(
+      'work/.quiet-review.json',
+      JSON.stringify({ cutoffs: { collapse_below: 0.35 } }),
+    )
+    const userPath = sandbox.write(
+      'config/quiet-review-axi/config.json',
+      JSON.stringify({
+        cutoffs: {
+          collapse_below: 0.27,
+          keep_at: 0.7,
+          replay: 'public-v1',
+          snapshot: 'typesafe/jev-1.13-20260917',
+          tested_collapse_below: 0.27,
+          written_at: '2026-10-01',
+        },
+      }),
+      0o600,
+    )
+
+    const result = await runCli([], { sandbox })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain(
+      'cutoffs: "collapse<0.35 keep>=0.70 (collapse: repo config, hand-set; keep: user config, calibrated on typesafe/jev-1.13-20260917 by replay public-v1)"',
+    )
+    expect(result.stdout).toContain(`repo_config: ${repoPath}`)
+    expect(result.stdout).toContain(`user_config: ${userPath}`)
+    expect(result.stdout).toContain(
+      'collapse cut-off 0.35 is above the 0.27 the last replay tested, so more real issues than the replay measured may be collapsed',
+    )
+  })
+
+  it('shows where the config files would go when none exist', async () => {
+    const sandbox = createSandbox()
+
+    const result = await runCli([], { sandbox })
+
+    expect(result.stdout).toContain(`repo_config: none (${sandbox.cwd}/.quiet-review.json)`)
+    expect(result.stdout).toContain(
+      `user_config: none (${sandbox.env.XDG_CONFIG_HOME}/quiet-review-axi/config.json)`,
+    )
+    expect(result.stdout).not.toContain('warnings')
+  })
+
   it('counts cache entries and sums today’s spend from the cost log', async () => {
     const sandbox = createSandbox()
     const file = sandbox.write(

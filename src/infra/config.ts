@@ -7,6 +7,21 @@ import { REPO_CONFIG_FILE, userConfigPath } from './paths.js'
 
 const probability = z.number().min(0).max(1)
 
+// A file that sets both cut-offs must hold them in order on its own (spec 6.1), even when a
+// flag overrides one of them for a run.
+function checkOrder(
+  cutoffs: { collapse_below?: number; keep_at?: number },
+  context: z.core.$RefinementCtx,
+) {
+  const { collapse_below: collapseBelow, keep_at: keepAt } = cutoffs
+  if (collapseBelow === undefined || keepAt === undefined || collapseBelow <= keepAt) return
+  context.addIssue({
+    code: 'custom',
+    path: ['collapse_below'],
+    message: `${collapseBelow} is above cutoffs.keep_at ${keepAt}; collapse_below must be at most keep_at`,
+  })
+}
+
 const userConfigSchema = z.object({
   provider: z.enum(['openrouter', 'typesafe']).optional(),
   keys: z
@@ -23,6 +38,8 @@ const userConfigSchema = z.object({
       tested_collapse_below: probability.optional(),
       written_at: z.string().optional(),
     })
+    .strict()
+    .superRefine(checkOrder)
     .optional(),
 })
 
@@ -31,6 +48,7 @@ const repoConfigSchema = z
     cutoffs: z
       .object({ collapse_below: probability.optional(), keep_at: probability.optional() })
       .strict()
+      .superRefine(checkOrder)
       .optional(),
   })
   .strict()
@@ -41,6 +59,17 @@ export type RepoConfig = z.infer<typeof repoConfigSchema>
 interface ConfigContext {
   env: Record<string, string | undefined>
   cwd: string
+}
+
+// The files cut-offs are read from (spec 6.2), keyed by the source name printed in output.
+export function cutoffFiles(context: ConfigContext): {
+  'repo config': string
+  'user config': string
+} {
+  return {
+    'repo config': join(context.cwd, REPO_CONFIG_FILE),
+    'user config': userConfigPath(context.env),
+  }
 }
 
 // The user config (spec 9.1). A file holding keys must be readable only by its owner.
@@ -77,13 +106,18 @@ export async function loadRepoConfig(context: ConfigContext): Promise<RepoConfig
 
 function parseConfig<T>(schema: z.ZodType<T>, text: string, path: string): T {
   const parsed = schema.safeParse(parseJsonFile(text, path))
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0]
-    throw validationError(
-      `Invalid config file ${path}: ${issue?.path.join('.') || '(root)'} ${issue?.message ?? ''}`.trim(),
-    )
-  }
+  if (!parsed.success)
+    throw validationError(`Invalid config file ${path}: ${describeIssue(parsed.error.issues[0])}`)
   return parsed.data
+}
+
+// Names the offending key in full, so an unknown key reads `cutoffs.keep`, not `cutoffs`.
+function describeIssue(issue: z.core.$ZodIssue | undefined): string {
+  if (issue === undefined) return '(root) is invalid'
+  const at = (keys: PropertyKey[]) => keys.map(String).join('.') || '(root)'
+  if (issue.code === 'unrecognized_keys')
+    return issue.keys.map((key) => `${at([...issue.path, key])} is not a known key`).join(', ')
+  return `${at(issue.path)} ${issue.message}`
 }
 
 function parseJsonFile(text: string, path: string): unknown {

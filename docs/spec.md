@@ -204,6 +204,8 @@ model: typesafe/jev-1.13
 key: set (env OPENROUTER_API_KEY)
 github_token: set (gh auth token)
 cutoffs: "collapse<0.30 keep>=0.70 (built-in, uncalibrated)"
+repo_config: none (/home/you/widgets/.quiet-review.json)
+user_config: /home/you/.config/quiet-review-axi/config.json
 cache: 412 entries
 spent_today_usd: 0.0031
 last_replay: public-v0 fail auroc=0.71
@@ -214,6 +216,8 @@ help[3]:
 ```
 
 `key:` and `github_token:` show only where the secret came from (`set (env NAME)`, `set (config file)`, `set (gh auth token)`) or `missing`. They never show any part of the secret.
+
+`repo_config:` and `user_config:` give the path of each file cut-offs are read from (6.2), or `none (<path>)` with the place it would go when it does not exist. When the collapse cut-off in effect is above the last replay's tested value (6.2), the view adds that warning in a `warnings` list. The stale warning needs a returned snapshot, so only `score` prints it.
 
 ### 4.4 `score <pr-url>`
 
@@ -676,7 +680,7 @@ Let `p` be the `cN_act` Noul (`worth` in output).
 | `p < collapse_below` | `collapse` | Low value; a future GitHub App would minimize it, never delete it. |
 
 - Jev returns only the probability. The cut-offs are Quiet Review's, applied in code.
-- Validation: `0 <= collapse_below <= keep_at <= 1`, otherwise `VALIDATION_ERROR` (exit 2).
+- Validation: `0 <= collapse_below <= keep_at <= 1`, otherwise `VALIDATION_ERROR` (exit 2), before any request. Equal values leave no `unsure` band. The check applies to the resolved pair, and also to each config file that sets both cut-offs on its own, even when a flag overrides one of them. An unknown key inside a `cutoffs` object is refused, not ignored. The error names the file and the key (for example `cutoffs.collapse_below`), or the flag.
 - Category, severity and duplicate **never** change the verdict in v0 (R4, D7). A duplicate with a high `p` is still `keep`.
 - Why three bands: live Jev answers drift by a few hundredths between runs ([jev-guide.md](jev-guide.md) 2.7). A single cut-off would flip borderline comments between keep and collapse. The `unsure` band absorbs that drift.
 
@@ -696,7 +700,7 @@ Rules:
 - **Stale.** When the returned model snapshot differs from the one recorded with calibrated cut-offs, the cut-offs are still used but marked `stale`, and output warns and suggests a replay re-run.
 - **Above the tested value.** When the effective `collapse_below`, from any source, is higher than the last replay's `tested_collapse_below`, output warns that more real issues than the replay measured may be collapsed.
 - **No criterion for keep.** The pass rule constrains only the collapse edge. The keep cut-off (0.70) has no pre-registered criterion in v0. `report` prints the measured precision above it (share of `keep` items labelled real) with its 95% range, so it can be judged.
-- How keep is decided, where cut-offs come from, and how calibration works get their own documentation page (12.1).
+- How keep is decided, where cut-offs come from, and how calibration works are explained for users in the README's "Verdict cut-offs" section, and later on their own documentation page (12.1).
 
 ### 6.3 Category and severity display
 
@@ -830,6 +834,7 @@ What is sent, to which provider, each provider's retention terms, and how to opt
 
 - When the file holds keys, it must be readable only by its owner (mode `0600` or stricter on POSIX). Otherwise the CLI refuses to read it and prints a `chmod 600` hint (`CONFIG_PERMISSIONS`, exit 4).
 - `provider` in the file sets the default provider; `--provider` wins.
+- In both files, `cutoffs` accepts only the keys shown here; any other key there is `VALIDATION_ERROR` (6.1).
 - The repository config `./.quiet-review.json` may hold only `cutoffs`, never keys or `allow_private`. A `keys` or `allow_private` field there is `VALIDATION_ERROR`, so keys cannot be committed by accident and privacy opt-in cannot be granted by a committed file (8.3).
 - **A key is never printed, logged, cached, put in a cache key, or included in an error message.** Every error path goes through a redactor that masks any configured key or token value and any `Authorization` header. Tests assert this (11.3).
 - A missing key is `MISSING_KEY` (exit 4), with help naming the env var. `--dry-run` and `--max-cost 0` (cache-only) work without a key.
@@ -1178,7 +1183,7 @@ Octokit is constructed with the injected `fetch`, so one fake covers both GitHub
 - **Behavioural tests** run the real CLI entry (`main({ argv, stdout, env })`) against fixtures and assert on the rendered TOON, JSON and exit code. Minimum set:
   - **`score <url>` on a recorded PR:** verdict counts, keep/unsure rows with text, collapsed as ids, sort order, truncation, cut-off source line, help lines;
   - the same with `--all`, `--json`, `--human`, and flag cut-offs;
-  - **cut-off resolution:** flag over repo config over user config over built-in; `uncalibrated`, `stale` and above-tested warnings; keys in the repo config rejected;
+  - **cut-off resolution:** flag over repo config over user config over built-in; `uncalibrated`, `stale` and above-tested warnings; keys in the repo config rejected; out-of-order cut-offs in one file, across files, and unknown `cutoffs` keys rejected with the file and key named; the home view's config file paths;
   - **duplicates** grouped under the earlier item, inside one call and across calls by exact text;
   - **`score --findings`:** valid input, missing `id` or `body` (exit 2 naming the finding), stdin, a missing hunk with and without `--repo-root`;
   - **splitting:** a PR over the budget packs file groups into the fewest calls, and `calls` reports the count;

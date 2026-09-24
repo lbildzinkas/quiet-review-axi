@@ -16,6 +16,8 @@ export interface CutoffInputs {
   flags?: { collapseBelow?: number; keepAt?: number }
   repoConfig?: { collapse_below?: number; keep_at?: number }
   userConfig?: UserConfigCutoffs
+  // Where each config file lives, so a validation error can name the file to fix.
+  files?: Partial<Record<CutoffSource, string>>
 }
 
 export interface Calibration {
@@ -59,9 +61,11 @@ export function resolveCutoffs(inputs: CutoffInputs): ResolvedCutoffs {
     ['user config', inputs.userConfig?.keep_at],
     ['built-in', BUILT_IN_CUTOFFS.keepAt],
   ])
+  const from = (source: CutoffSource) =>
+    inputs.files?.[source] === undefined ? source : `${source} ${inputs.files[source]}`
   if (!(collapse.value >= 0 && collapse.value <= keep.value && keep.value <= 1))
     throw validationError(
-      `Cut-offs must satisfy 0 <= collapse_below <= keep_at <= 1; got collapse_below ${collapse.value} (${collapse.source}) and keep_at ${keep.value} (${keep.source})`,
+      `Cut-offs must satisfy 0 <= collapse_below <= keep_at <= 1; got collapse_below ${collapse.value} (${from(collapse.source)}) and keep_at ${keep.value} (${from(keep.source)})`,
       [
         'Run `quiet-review-axi score <pr-url> --collapse-below 0.3 --keep-at 0.7` with valid cut-offs',
       ],
