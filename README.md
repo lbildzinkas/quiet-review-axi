@@ -143,7 +143,7 @@ The write keeps every other field in the file, leaves the file readable only by 
 ```
 
 Before it replaces existing cut-offs, `evaluate` prints the old values.
-A replay that fails, is inconclusive, or cannot reach a verdict (for example while your review of the label check is unfinished) writes nothing.
+A replay that fails, is inconclusive, or cannot reach a verdict (for example while your review of the label check is unfinished) writes nothing, and an inconclusive replay cannot serve as the baseline for `gate` either.
 The replay tests only the collapse cut-off.
 `quiet-review-axi report` shows how often comments at or above `keep_at` were real, so you can judge the keep cut-off yourself.
 

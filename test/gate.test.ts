@@ -1,10 +1,11 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { QUESTION_PACK_VERSION } from '../src/core/questions.js'
 import { combineHandlers, runCli, type Sandbox } from './helpers/run-cli.js'
+import { createFakeLabelModel } from './helpers/fake-label-model.js'
 import { JEV_KEY, readJsonl, runReplay, type FakeJev } from './helpers/replay.js'
-import { jevByPart, scoredReplay, WORTH } from './helpers/scored-replay.js'
+import { jevByPart, sampledReplay, scoredReplay, WORTH } from './helpers/scored-replay.js'
 
 const BUILT_IN = JSON.parse(
   readFileSync(new URL('../src/core/question-pack.json', import.meta.url), 'utf8'),
@@ -36,6 +37,18 @@ function gate(argv: string[], sandbox: Sandbox, jev: FakeJev) {
 
 function replayPath(sandbox: Sandbox, name: string) {
   return join(sandbox.cwd, '.quiet-review', 'replays', 'public-v1', name)
+}
+
+// Sets the maintainer's `label` on review.jsonl lines, by pull request, as a person would.
+function fillReview(sandbox: Sandbox, labels: Record<number, string>) {
+  const path = replayPath(sandbox, 'review.jsonl')
+  const filled = readJsonl(path).map((line) => ({ ...line, label: labels[Number(line.pr)] }))
+  writeFileSync(path, filled.map((line) => `${JSON.stringify(line)}\n`).join(''))
+}
+
+// The replay world's comment ids encode their pull request: 1_000_000 + pr * 1000 + ...
+function prOf(commentId: number): number {
+  return Math.floor((commentId % 1_000_000) / 1000)
 }
 
 describe('question-pack regression gate', () => {
@@ -200,6 +213,40 @@ describe('question-pack regression gate', () => {
 })
 
 describe('question-pack regression gate baseline', () => {
+  it('refuses to gate against a replay whose trust gate made the verdict inconclusive', async () => {
+    const { sandbox, gitHub } = sampledReplay()
+    const jev = jevByPart(WORTH)
+    // The AI calls PR 7 (automatically real) noise and is unsure about PR 10 (noise).
+    const labelModel = createFakeLabelModel({
+      answer: (id) =>
+        ({ 7: 'noise', 10: 'unsure' })[prOf(id)] ?? (prOf(id) % 2 === 1 ? 'real' : 'noise'),
+    })
+    await runReplay(['public-v1'], sandbox, gitHub, { jev, labelModel })
+    // Overturns 1 of the 2 reviewed labels (0.5); the scores alone would still pass.
+    fillReview(sandbox, { 7: 'noise', 10: 'noise' })
+    const replayed = await runReplay(['public-v1'], sandbox, gitHub, { jev })
+
+    expect(replayed.exitCode).toBe(0)
+    expect(replayed.stdout).toContain('inconclusive')
+
+    const candidate = jevByPart(WORTH)
+    const result = await gate(
+      ['public-v1', '--pack', writeCandidatePack(sandbox)],
+      sandbox,
+      candidate,
+    )
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toContain(
+      'Replay public-v1 is inconclusive: its automatic labels are not trusted, so its metrics cannot judge a pack',
+    )
+    expect(candidate.calls).toHaveLength(0)
+    expect(readJsonl(replayPath(sandbox, 'runs.jsonl')).map((line) => line.kind)).toEqual([
+      'evaluate',
+    ])
+    expect(existsSync(replayPath(sandbox, 'gates/v0.2.json'))).toBe(false)
+  })
+
   it('refuses to gate against a replay whose pass rule was refused, and a pack version that is not a plain token', async () => {
     const { sandbox, gitHub } = scoredReplay()
     const mixed = jevByPart(WORTH, {
