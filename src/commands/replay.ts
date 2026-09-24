@@ -12,10 +12,10 @@ import { createReplayFetch } from '../replay/fetch.js'
 import { findApiKey, loadUserConfig, missingKeyError } from '../infra/config.js'
 import { openRouterProvider } from '../jev/openrouter.js'
 import { labelComment, type Label } from '../replay/label.js'
-import { agreementOf, drawCheckSample, LABEL_PROMPT_VERSION } from '../replay/label-check.js'
+import { LABEL_PROMPT_VERSION } from '../replay/label-check.js'
+import { runCheck } from '../replay/check.js'
 import { canonicalJson } from '../infra/canonical-json.js'
 import { labelCacheDir } from '../infra/paths.js'
-import { runLabelModel } from '../replay/label-model.js'
 import type { Rejection } from '../replay/select.js'
 import {
   fromJsonl,
@@ -167,8 +167,11 @@ async function labelStage(run: ReplayRun): Promise<void> {
 async function checkStage(run: ReplayRun): Promise<void> {
   const files = replayFiles(run.dir)
   const itemsText = await readOptional(files.items)
-  const labelsText = await readOptional(files.labels)
-  if (itemsText === null || labelsText === null) throw new Error('label first')
+  const labelsText = run.manifest.stages.label ? await readOptional(files.labels) : null
+  if (itemsText === null || labelsText === null)
+    throw validationError(`The label stage of replay ${run.name} has not run yet`, [
+      `Run \`quiet-review-axi replay ${run.name}\` to build and label the dataset first`,
+    ])
   // The sample and the requests follow from the labels, the items and the prompt template.
   const inputHash = hashText(
     canonicalJson({
@@ -177,52 +180,40 @@ async function checkStage(run: ReplayRun): Promise<void> {
       prompt: LABEL_PROMPT_VERSION,
     }),
   )
-  if (run.manifest.stages.check?.input_hash === inputHash) return
-  const labelsById = new Map(
-    fromJsonl<{ id: string; label: Label }>(labelsText).map((entry) => [entry.id, entry.label]),
-  )
-  const labelled = fromJsonl<DrawnItem>(itemsText).map((item) => ({
-    item,
-    label: labelsById.get(item.id) ?? 'excluded',
-  }))
-  const sample = drawCheckSample(labelled)
+  const previous = run.manifest.stages.check
+  if (previous?.input_hash === inputHash && previous.status !== 'waiting') return
   const { context } = run
   const userConfig = await loadUserConfig(context)
-  const answers = await runLabelModel({
-    sample,
-    model: run.loaded.config.label_check.model,
-    useCache: true,
-    cacheDir: labelCacheDir(context.env),
-    now: context.now,
-    apiKey: () => {
-      const found = findApiKey(openRouterProvider, context.env, userConfig)
-      if (!found) throw missingKeyError(openRouterProvider)
-      return found.key
+  const record = await runCheck({
+    files,
+    items: fromJsonl<DrawnItem>(itemsText),
+    labels: new Map(
+      fromJsonl<{ id: string; label: Label }>(labelsText).map((entry) => [entry.id, entry.label]),
+    ),
+    needsModel: previous?.input_hash !== inputHash,
+    model: {
+      model: run.loaded.config.label_check.model,
+      useCache: true,
+      cacheDir: labelCacheDir(context.env),
+      apiKey: () => {
+        const found = findApiKey(openRouterProvider, context.env, userConfig)
+        if (!found) throw missingKeyError(openRouterProvider)
+        return found.key
+      },
+      fetch: context.fetch,
+      sleep: context.sleep,
+      random: context.random,
+      now: context.now,
     },
-    fetch: context.fetch,
-    sleep: context.sleep,
-    random: context.random,
   })
-  const aiById = new Map(answers.map((answer) => [answer.id, answer.label]))
-  const agreement = agreementOf(
-    sample.map((entry) => ({ automatic: entry.label, ai: aiById.get(entry.item.id) ?? 'unsure' })),
-  )
-  run.manifest.stages.check = {
-    input_hash: inputHash,
-    detail: `${sample.length} sampled, AI agreement ${formatRate(agreement.agreement)} (kappa ${formatRate(agreement.kappa)}), 0 reviewed, 0 automatic labels corrected`,
-    completed_at: context.now().toISOString(),
-  }
+  run.manifest.stages.check = { input_hash: inputHash, ...record }
   await writeManifest(run.dir, run.manifest)
-}
-
-function formatRate(value: number | null): string {
-  return value === null ? 'n/a' : String(Math.round(value * 100) / 100)
 }
 
 async function renderReplay(run: ReplayRun): Promise<string> {
   const stages = STAGES.map((stage) => {
     const record = run.manifest.stages[stage]
-    if (record) return { stage, status: 'done', detail: record.detail }
+    if (record) return { stage, status: record.status ?? 'done', detail: record.detail }
     if (stage === 'build' && run.discovery)
       return {
         stage,
@@ -289,6 +280,10 @@ function helpLines(run: ReplayRun): string[] {
     return [`Run \`quiet-review-axi replay ${run.name}\` to build and label the dataset`]
   if (!run.manifest.stages.label)
     return [`Run \`quiet-review-axi replay ${run.name} --stage label\` to label the dataset`]
+  if (run.manifest.stages.check?.status === 'waiting')
+    return [
+      `Run \`quiet-review-axi replay ${run.name} --stage check\` after setting \`label\` to real, noise or excluded on each line of ${relative(run.context.cwd, replayFiles(run.dir).review)}, to record the reviewed labels`,
+    ]
   return [
     `Run \`quiet-review-axi replay ${run.name} --stage label\` to recompute the labels from the recorded evidence`,
   ]

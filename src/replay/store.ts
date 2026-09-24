@@ -15,6 +15,9 @@ export interface StageRecord {
   input_hash: string
   detail: string
   completed_at: string
+  // A stage that ran but waits on something outside the tool, such as the maintainer's
+  // review of the label check's disagreements. Absent means done.
+  status?: 'waiting'
   counts?: Record<string, number>
   // Excluded items by reason (label stage).
   excluded_by_reason?: Record<string, number>
@@ -39,6 +42,8 @@ export function replayFiles(dir: string) {
     labels: join(dir, 'labels.jsonl'),
     buildLog: join(dir, 'build-log.jsonl'),
     candidates: join(dir, 'candidates.jsonl'),
+    check: join(dir, 'check.jsonl'),
+    review: join(dir, 'review.jsonl'),
     github: join(dir, 'github'),
   }
 }
