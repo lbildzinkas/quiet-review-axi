@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { QUESTION_PACK_VERSION } from '../src/core/questions.js'
 import { config } from './fixtures/github/replay-world.js'
+import { createFakeLabelModel } from './helpers/fake-label-model.js'
 import { createFakeJev, runCli, runReplay, setupReplay } from './helpers/replay.js'
-import { scoredReplay } from './helpers/scored-replay.js'
+import { sampledReplay, scoredReplay } from './helpers/scored-replay.js'
 import type { Sandbox } from './helpers/run-cli.js'
 
 function report(argv: string[], sandbox: Sandbox) {
@@ -136,6 +137,51 @@ describe('report', () => {
       'model: "typesafe/jev-1.13-20260917, typesafe/jev-1.13-20261001"',
     )
     expect(result.stdout).toContain('by_snapshot[2]{snapshot,items,real,auroc}:')
+  })
+})
+
+describe('report on the label-check sample alone', () => {
+  it('shows the sample metrics as a robustness check next to the verdict on every item', async () => {
+    const { sandbox, gitHub, jev } = sampledReplay()
+    await runReplay(['public-v1'], sandbox, gitHub, { jev })
+
+    const result = await report(['public-v1'], sandbox)
+    const json = JSON.parse((await report(['public-v1', '--json'], sandbox)).stdout)
+
+    expect(result.stdout).toContain('verdict: pass\n')
+    expect(result.stdout).toContain('auroc: 0.96\n')
+    expect(result.stdout).toContain(
+      [
+        'label_check_sample:',
+        '  note: robustness check on the label-check sample alone; the verdict is judged on every item',
+        '  items: 4',
+        '  real: 2',
+        '  noise: 2',
+        '  auroc: 1',
+        '  auroc_ci95: 1-1',
+        '  best_threshold: 0.31',
+        '  noise_collapsed: 1',
+        '  noise_collapsed_ci95: 1-1',
+        '  real_hidden: 0',
+        '  real_hidden_ci95: 0-0',
+        '  keep_precision: 1',
+        '  keep_precision_ci95: 1-1',
+      ].join('\n'),
+    )
+    expect(json.label_check_sample).toMatchObject({ items: 4, auroc: 1, auroc_ci95: '1-1' })
+  })
+
+  it('says why there are no sample metrics when the review was unfinished at evaluate', async () => {
+    const { sandbox, gitHub, jev } = sampledReplay()
+    const labelModel = createFakeLabelModel({ answer: () => 'unsure' })
+    await runReplay(['public-v1'], sandbox, gitHub, { jev, labelModel })
+    await runReplay(['public-v1', '--stage', 'evaluate'], sandbox, gitHub, { jev })
+
+    const result = await report(['public-v1'], sandbox)
+
+    expect(result.stdout).toContain(
+      'label_check_sample: n/a until the label check review is complete\n',
+    )
   })
 })
 

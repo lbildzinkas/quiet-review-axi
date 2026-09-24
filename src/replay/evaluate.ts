@@ -1,6 +1,8 @@
 import {
   calibratedBand,
   evaluateJudgments,
+  type Evaluation,
+  type EvaluationOptions,
   type GroupRow,
   type LabelledJudgment,
   type Range,
@@ -22,17 +24,8 @@ export interface BreakdownRow {
   auroc: number | null
 }
 
-// The evaluate stage's result (spec 10.7, 10.8): aggregate numbers only, never comment text
-// (spec 10.9), so it can be summarized into replay/<name>.result.md.
-export interface ReplayResult {
-  replay: string
-  evaluated_at: string
-  question_pack: string
-  provider: string
-  snapshots: string[]
-  verdict: 'pass' | 'fail' | 'refused'
-  refusal: string | null
-  pass_rule: ReplayConfig['pass_rule']
+// The accuracy metrics with their 95% ranges, as measured on one set of labelled items.
+export interface HeadlineMetrics {
   items: number
   real: number
   noise: number
@@ -43,9 +36,22 @@ export interface ReplayResult {
   noise_collapsed_ci95: Interval | null
   real_hidden: number | null
   real_hidden_ci95: Interval | null
-  keep_at: number
   keep_precision: number | null
   keep_precision_ci95: Interval | null
+}
+
+// The evaluate stage's result (spec 10.7, 10.8): aggregate numbers only, never comment text
+// (spec 10.9), so it can be summarized into replay/<name>.result.md.
+export interface ReplayResult extends HeadlineMetrics {
+  replay: string
+  evaluated_at: string
+  question_pack: string
+  provider: string
+  snapshots: string[]
+  verdict: 'pass' | 'fail' | 'refused'
+  refusal: string | null
+  pass_rule: ReplayConfig['pass_rule']
+  keep_at: number
   // The cut-offs a pass calibrates: collapse at the best threshold, keep at 0.70 or above it.
   calibrated_cutoffs: { collapse_below: number; keep_at: number } | null
   // Set when a pass wrote the calibrated cut-offs: what was written, and where.
@@ -66,6 +72,10 @@ export interface ReplayResult {
   by_snapshot: (BreakdownRow & { snapshot: string })[]
   duplicate_rate: number
   excluded_by_reason: Record<string, number>
+  // The same metrics on the label-check sample alone, as a robustness check that never changes
+  // the verdict; null until the label check's review is complete. Absent from results
+  // evaluated before it was computed.
+  label_check_sample?: HeadlineMetrics | null
   calls: number
   cost_usd: number
 }
@@ -79,6 +89,8 @@ export function evaluateReplay(input: {
   config: ReplayConfig
   items: DrawnItem[]
   labels: FinalLabel[]
+  // The label-check sample's ids once its review is complete, else null.
+  sampled: string[] | null
   scores: ScoreRow[]
   scoring: { question_pack: string; provider: string; calls: number; cost_usd: number }
   excludedByReason: Record<string, number>
@@ -106,7 +118,7 @@ export function evaluateReplay(input: {
     ]
   })
   const rule = input.config.pass_rule
-  const evaluation = evaluateJudgments(judgments, {
+  const options: EvaluationOptions = {
     passRule: {
       minAuroc: rule.min_auroc,
       minNegativesBelow: rule.min_noise_collapsed,
@@ -115,7 +127,9 @@ export function evaluateReplay(input: {
     acceptAt: BUILT_IN_CUTOFFS.keepAt,
     seed: input.config.seed,
     resamples: BOOTSTRAP_RESAMPLES,
-  })
+  }
+  const evaluation = evaluateJudgments(judgments, options)
+  const sampled = input.sampled === null ? null : new Set(input.sampled)
   const { threshold } = evaluation
   const band =
     evaluation.verdict === 'pass' && threshold
@@ -139,19 +153,8 @@ export function evaluateReplay(input: {
           ? 'needs both real and noise items'
           : null,
     pass_rule: rule,
-    items: evaluation.counts.items,
-    real: evaluation.counts.positives,
-    noise: evaluation.counts.negatives,
-    auroc: evaluation.auroc,
-    auroc_ci95: interval(evaluation.ranges.auroc),
-    best_threshold: threshold?.threshold ?? null,
-    noise_collapsed: threshold?.negativesBelow ?? null,
-    noise_collapsed_ci95: interval(evaluation.ranges.negativesBelow),
-    real_hidden: threshold?.positivesBelow ?? null,
-    real_hidden_ci95: interval(evaluation.ranges.positivesBelow),
+    ...headlineMetrics(evaluation),
     keep_at: BUILT_IN_CUTOFFS.keepAt,
-    keep_precision: evaluation.acceptPrecision,
-    keep_precision_ci95: interval(evaluation.ranges.acceptPrecision),
     calibrated_cutoffs: band && { collapse_below: band.lower, keep_at: band.upper },
     bootstrap: { resamples: BOOTSTRAP_RESAMPLES, seed: input.config.seed },
     sweep: evaluation.sweep.map((row) => ({
@@ -176,8 +179,34 @@ export function evaluateReplay(input: {
         ? 0
         : input.scores.filter((row) => row.dup_of !== null).length / input.scores.length,
     excluded_by_reason: input.excludedByReason,
+    label_check_sample:
+      sampled &&
+      headlineMetrics(
+        evaluateJudgments(
+          judgments.filter((judgment) => sampled.has(judgment.id)),
+          options,
+        ),
+      ),
     calls: input.scoring.calls,
     cost_usd: input.scoring.cost_usd,
+  }
+}
+
+function headlineMetrics(evaluation: Evaluation): HeadlineMetrics {
+  const { threshold } = evaluation
+  return {
+    items: evaluation.counts.items,
+    real: evaluation.counts.positives,
+    noise: evaluation.counts.negatives,
+    auroc: evaluation.auroc,
+    auroc_ci95: interval(evaluation.ranges.auroc),
+    best_threshold: threshold?.threshold ?? null,
+    noise_collapsed: threshold?.negativesBelow ?? null,
+    noise_collapsed_ci95: interval(evaluation.ranges.negativesBelow),
+    real_hidden: threshold?.positivesBelow ?? null,
+    real_hidden_ci95: interval(evaluation.ranges.positivesBelow),
+    keep_precision: evaluation.acceptPrecision,
+    keep_precision_ci95: interval(evaluation.ranges.acceptPrecision),
   }
 }
 

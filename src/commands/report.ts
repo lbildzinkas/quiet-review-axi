@@ -6,7 +6,7 @@ import type { AppContext } from '../context.js'
 import { formatCutoff } from '../core/cutoffs.js'
 import { validationError } from '../errors.js'
 import { joinBlocks, renderHelp } from '../output/render.js'
-import type { Interval, ReplayResult } from '../replay/evaluate.js'
+import type { HeadlineMetrics, Interval, ReplayResult } from '../replay/evaluate.js'
 import {
   readManifest,
   readOptional,
@@ -19,6 +19,9 @@ const REPORT_FLAGS = {
   dir: { type: 'string' },
   json: { type: 'boolean' },
 } as const
+
+const SAMPLE_NOTE =
+  'robustness check on the label-check sample alone; the verdict is judged on every item'
 
 const OPTIMISM_NOTE =
   'best_threshold is chosen on the same data it is measured on, so noise_collapsed and real_hidden are optimistic'
@@ -70,23 +73,16 @@ function summaryView(
   Object.assign(view, {
     model: result.snapshots.join(', ') || 'none',
     question_pack: result.question_pack,
-    items: result.items,
-    real: result.real,
-    noise: result.noise,
-    auroc: rate(result.auroc),
-    auroc_ci95: range(result.auroc_ci95),
-    best_threshold: result.best_threshold ?? 'none',
-    noise_collapsed: rate(result.noise_collapsed),
-    noise_collapsed_ci95: range(result.noise_collapsed_ci95),
-    real_hidden: rate(result.real_hidden),
-    real_hidden_ci95: range(result.real_hidden_ci95),
-    keep_precision: rate(result.keep_precision),
-    keep_precision_ci95: range(result.keep_precision_ci95),
+    ...metricsView(result),
     pass_rule: `auroc >= ${formatCutoff(rule.min_auroc)} and exists t: noise_collapsed >= ${formatCutoff(rule.min_noise_collapsed)} and real_hidden <= ${formatCutoff(rule.max_real_hidden)} (judged on measured values)`,
     note: OPTIMISM_NOTE,
     // The check stage's own summary line (10.6), straight from its record; 'not run' until
     // the replay has one.
     label_check: check?.detail ?? 'not run',
+    // Null until the review is complete; absent (also shown as n/a) from older results.
+    label_check_sample: result.label_check_sample
+      ? { note: SAMPLE_NOTE, ...metricsView(result.label_check_sample) }
+      : 'n/a until the label check review is complete',
   })
   if (result.cutoffs_written !== undefined) view.cutoffs_written = result.cutoffs_written
   view.by_bot = result.by_bot.map((row) => ({
@@ -104,6 +100,23 @@ function summaryView(
     }))
   view.cost_usd = result.cost_usd
   return view
+}
+
+function metricsView(metrics: HeadlineMetrics): Record<string, unknown> {
+  return {
+    items: metrics.items,
+    real: metrics.real,
+    noise: metrics.noise,
+    auroc: rate(metrics.auroc),
+    auroc_ci95: range(metrics.auroc_ci95),
+    best_threshold: metrics.best_threshold ?? 'none',
+    noise_collapsed: rate(metrics.noise_collapsed),
+    noise_collapsed_ci95: range(metrics.noise_collapsed_ci95),
+    real_hidden: rate(metrics.real_hidden),
+    real_hidden_ci95: range(metrics.real_hidden_ci95),
+    keep_precision: rate(metrics.keep_precision),
+    keep_precision_ci95: range(metrics.keep_precision_ci95),
+  }
 }
 
 // Rates and AUROC to three decimals; the TOON encoder drops trailing zeros.

@@ -41,3 +41,20 @@ export function scoredReplay(name = 'public-v1') {
   })
   return { ...setup, jev: jevByPart(WORTH) }
 }
+
+// Ten PRs scored by part (odd real, even noise), with a 4-item label-check sample. The seeded
+// sample draws PRs 7 and 9 (real, worth 0.7 and 0.95) and PRs 2 and 10 (noise, 0.1 and 0.3):
+// every sampled real item outscores every sampled noise item, unlike the full set (AUROC 0.96).
+export function sampledReplay() {
+  const { sandbox, gitHub } = setupReplay({
+    config: { target_items: 100, label_check: { sample_size: 4, model: 'example/label-model' } },
+    specs: [
+      {
+        name: 'acme/widgets',
+        bots: { 'coderabbitai[bot]': 10 },
+        body: ({ pr, id }) => `Comment (#${id}) on part ${pr}`,
+      },
+    ],
+  })
+  return { sandbox, gitHub, jev: jevByPart(WORTH) }
+}
