@@ -30,6 +30,7 @@ import {
   writeManifest,
   type Manifest,
   type StageName,
+  type StageRecord,
 } from '../replay/store.js'
 
 const REPLAY_FLAGS = {
@@ -180,8 +181,8 @@ async function checkStage(run: ReplayRun): Promise<void> {
       prompt: LABEL_PROMPT_VERSION,
     }),
   )
+  // The model runs only when the inputs changed; review.jsonl is read back on every run.
   const previous = run.manifest.stages.check
-  if (previous?.input_hash === inputHash && previous.status !== 'waiting') return
   const { context } = run
   const userConfig = await loadUserConfig(context)
   const record = await runCheck({
@@ -206,8 +207,16 @@ async function checkStage(run: ReplayRun): Promise<void> {
       now: context.now,
     },
   })
+  if (previous?.input_hash === inputHash && sameOutcome(previous, record)) return
   run.manifest.stages.check = { input_hash: inputHash, ...record }
   await writeManifest(run.dir, run.manifest)
+}
+
+// Whether a re-run reached the same result, so the stage record stays as it was.
+function sameOutcome(previous: StageRecord, next: Omit<StageRecord, 'input_hash'>): boolean {
+  const outcome = (record: Partial<StageRecord>) =>
+    canonicalJson({ ...record, input_hash: null, completed_at: null })
+  return outcome(previous) === outcome(next)
 }
 
 async function renderReplay(run: ReplayRun): Promise<string> {

@@ -44,6 +44,7 @@ export function replayFiles(dir: string) {
     candidates: join(dir, 'candidates.jsonl'),
     check: join(dir, 'check.jsonl'),
     review: join(dir, 'review.jsonl'),
+    finalLabels: join(dir, 'final-labels.jsonl'),
     github: join(dir, 'github'),
   }
 }
