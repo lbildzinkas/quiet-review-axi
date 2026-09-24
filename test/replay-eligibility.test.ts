@@ -59,6 +59,26 @@ describe('label evidence read from GitHub (spec 10.5)', () => {
     expect(result.stdout).toContain('file renamed,1')
   })
 
+  it('excludes a comment on a file too large for the contents endpoint instead of failing the build', async () => {
+    const { sandbox, gitHub } = setupReplay({
+      config: { target_items: 100 },
+      specs: [
+        {
+          name: 'acme/widgets',
+          bots: { 'coderabbitai[bot]': 10 },
+          changed: () => true,
+          oversized: ({ pr }) => pr === 1,
+        },
+      ],
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub)
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('label,done,"real 9, noise 0, excluded 1"')
+    expect(result.stdout).toContain('file unavailable,1')
+  })
+
   it('labels an unchanged comment real when a person agreed and resolved the thread', async () => {
     const { sandbox, gitHub } = setupReplay({
       config: { target_items: 100 },

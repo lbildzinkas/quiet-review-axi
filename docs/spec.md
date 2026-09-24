@@ -858,7 +858,7 @@ A JSON file committed at `replay/<name>.config.json`:
 
 The window is the 3 months before the dataset build date (R9). It includes `merged_after` and excludes `merged_before` (UTC days). Bot logins in `bots` are examples; `build` verifies each login against real comments before drawing.
 
-The config is strict: an unknown field, a share outside (0, 1], a non-positive count, a window whose start is not before its end, or a repository that is not `owner/repo` is `VALIDATION_ERROR` (exit 2).
+The config is strict: an unknown field, a share outside (0, 1], a non-positive count, a window whose start is not before its end, a repository that is not `owner/repo`, or a repeated repository or bot is `VALIDATION_ERROR` (exit 2).
 Its **pre-registration hash** is the SHA-256 of its canonical JSON (fixed key order, R17), printed as `config_hash` and recorded when `build` completes.
 
 ### 10.3 Repository and bot selection
@@ -936,7 +936,7 @@ Only replies in the comment's own thread are evidence; review bodies and PR conv
 | 1 | `from` or `to` cannot be fetched (force-push lost the commit), the anchor cannot be mapped, or the file was deleted or renamed after the comment | `excluded` (reason recorded) |
 | 2 | More than 50% of the file's lines changed between `from` and `to` (large rewrite; a change at the anchor may be coincidence) | `excluded: rewrite` |
 
-Rule 1's recorded reasons: `commit unavailable` (the comparison is not found); `history rewritten` (the comparison's merge base is not `from`, so `from` is no longer an ancestor of `to`); `anchor unmapped`; `file deleted`; `file renamed`; `diff unavailable` (GitHub returned no patch for the file, or listed 300 files, its maximum, without it); `file unavailable` (the file's line count at `from`, needed for rule 2, could not be read).
+Rule 1's recorded reasons: `commit unavailable` (the comparison is not found); `history rewritten` (the comparison's merge base is not `from`, so `from` is no longer an ancestor of `to`); `anchor unmapped`; `file deleted`; `file renamed`; `diff unavailable` (GitHub returned no patch for the file, or listed 300 files, its maximum, without it); `file unavailable` (the file's line count at `from`, needed for rule 2, could not be read; the contents endpoint refuses files larger than 100 MB with 403 `too_large`).
 Rule 2 measures the share as the file's deleted or modified lines (the comparison's `deletions`) over its line count at `from`; exactly 50% is not a rewrite.
 | 3 | `agree` and `disagree` both present | `excluded: conflicting replies` |
 | 4 | `changed` and `disagree` | `excluded: conflicting signals` |

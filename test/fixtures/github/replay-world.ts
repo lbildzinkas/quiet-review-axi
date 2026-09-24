@@ -32,6 +32,8 @@ export interface RepositorySpec {
   mergedAt?: (pr: number) => string | null
   // Whether the author changed the commented lines before merge (default: odd pull requests).
   changed?: (comment: CommentContext) => boolean
+  // Whether the commented file is too large for the contents endpoint (default: false).
+  oversized?: (comment: CommentContext) => boolean
   // Extra thread replies and resolution for a comment.
   replies?: (comment: CommentContext) => { login: string; type?: string; body: string }[]
   resolved?: (comment: CommentContext) => boolean
@@ -115,7 +117,9 @@ export function buildWorld(specs: RepositorySpec[]): FakeReplayWorld {
           const isChanged = spec.changed ? spec.changed(context) : pr % 2 === 1
           if (isChanged) {
             files.push(modifiedAt(path, COMMENT_LINE))
-            world.contents[`${spec.name}:${path}@${from}`] = fileText(FILE_LINES)
+            world.contents[`${spec.name}:${path}@${from}`] = spec.oversized?.(context)
+              ? { tooLarge: true }
+              : fileText(FILE_LINES)
           }
         }
       })

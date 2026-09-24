@@ -8,14 +8,19 @@ import { canonicalJson } from '../infra/canonical-json.js'
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be a YYYY-MM-DD date')
 const share = z.number().gt(0).max(1)
 const positiveInteger = z.number().int().positive()
+const repository = z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'must be owner/repo')
+
+function unique(values: string[]): boolean {
+  return new Set(values).size === values.length
+}
 
 // The replay config (spec 10.2). Strict, so a typo cannot silently change the experiment.
 const replayConfigSchema = z
   .object({
     name: z.string().min(1),
     window: z.object({ merged_after: day, merged_before: day }).strict(),
-    repositories: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'must be owner/repo')),
-    bots: z.array(z.string().min(1)).min(1),
+    repositories: z.array(repository).refine(unique, 'must not repeat a repository'),
+    bots: z.array(z.string().min(1)).min(1).refine(unique, 'must not repeat a bot'),
     target_items: positiveInteger,
     max_share_per_repository: share,
     max_share_per_bot: share,

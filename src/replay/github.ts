@@ -241,7 +241,7 @@ export async function fetchFileLines(
     if (text.length === 0) return 0
     return text.replace(/\n$/, '').split('\n').length
   } catch (error) {
-    if (isMissing(error)) return null
+    if (isMissing(error) || isOversized(error)) return null
     throw gitHubError(error, `${path} at ${ref} in ${repository}`)
   }
 }
@@ -249,4 +249,12 @@ export async function fetchFileLines(
 function isMissing(error: unknown): boolean {
   const status = (error as { status?: number }).status
   return status === 404 || status === 422
+}
+
+// GitHub refuses the contents endpoint for files larger than 100 MB with 403 `too_large`,
+// which is not an access problem: the line count simply cannot be read.
+function isOversized(error: unknown): boolean {
+  if ((error as { status?: number }).status !== 403) return false
+  const data = (error as { response?: { data?: unknown } }).response?.data
+  return JSON.stringify(data ?? {}).includes('too_large')
 }

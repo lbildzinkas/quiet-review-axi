@@ -16,6 +16,8 @@ describe('replay config', () => {
     [{ max_share_per_bot: 1.5 }, 'max_share_per_bot'],
     [{ window: { merged_after: '2026-09-23', merged_before: '2026-06-25' } }, 'merged_after'],
     [{ repositories: ['not-a-repo'] }, 'owner/repo'],
+    [{ repositories: ['acme/widgets', 'acme/widgets'] }, 'must not repeat a repository'],
+    [{ bots: ['coderabbitai[bot]', 'coderabbitai[bot]'] }, 'must not repeat a bot'],
     [{ name: 'other' }, 'named other'],
   ])('rejects an invalid config %j with exit 2', async (override, message) => {
     const { sandbox, gitHub } = setupReplay({ config: override })

@@ -48,8 +48,9 @@ export interface FakeReplayWorld {
   pulls: FakePull[]
   // Compare results keyed by `owner/repo:from...to`; missing entries answer 404.
   compares?: Record<string, { merge_base?: string; files: FakeCompareFile[] }>
-  // File contents keyed by `owner/repo:path@ref`.
-  contents?: Record<string, string>
+  // File contents keyed by `owner/repo:path@ref`; a `{ tooLarge: true }` value answers the
+  // 403 the contents endpoint returns for a file larger than 100 MB.
+  contents?: Record<string, string | { tooLarge: true }>
 }
 
 // A read-only stand-in for the GitHub REST search, repository, pull, compare and contents
@@ -109,13 +110,20 @@ export function createFakeGitHubReplay(
     }
     const contentsMatch = rest.match(/^\/contents\/(.+)$/)
     if (contentsMatch) {
-      const text =
+      const contents =
         world.contents?.[`${fullName}:${contentsMatch[1]}@${parsed.searchParams.get('ref')}`]
-      if (text === undefined) return notFound()
+      if (contents === undefined) return notFound()
+      if (typeof contents !== 'string')
+        return jsonResponse(403, {
+          message: 'This file is too large to display',
+          documentation_url: 'https://docs.github.com/rest/repos/contents#get-repository-content',
+          status: '403',
+          errors: [{ resource: 'Core', code: 'too_large', message: 'This file is too large' }],
+        })
       return jsonResponse(200, {
         type: 'file',
         encoding: 'base64',
-        content: Buffer.from(text, 'utf8').toString('base64'),
+        content: Buffer.from(contents, 'utf8').toString('base64'),
       })
     }
     return notFound()
