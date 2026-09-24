@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { canonicalJson } from '../infra/canonical-json.js'
 
@@ -22,6 +22,11 @@ export interface StageRecord {
   // Excluded items by reason (label stage).
   excluded_by_reason?: Record<string, number>
   warnings?: string[]
+  // Scoring facts (score stage): the question pack, provider and snapshots used, and cost.
+  question_pack?: string
+  provider?: string
+  snapshots?: string[]
+  cost_usd?: number
   // Agreement figures and the trust gate (check stage, spec 10.6).
   label_check?: {
     model: string
@@ -51,6 +56,11 @@ export function replayFiles(dir: string) {
     manifest: join(dir, 'manifest.json'),
     items: join(dir, 'items.jsonl'),
     labels: join(dir, 'labels.jsonl'),
+    scores: join(dir, 'scores.jsonl'),
+    result: join(dir, 'result.json'),
+    runs: join(dir, 'runs.jsonl'),
+    // The last regression-gate run for a candidate question pack (spec 5.4.5).
+    gate: (packVersion: string) => join(dir, 'gates', `${packVersion}.json`),
     buildLog: join(dir, 'build-log.jsonl'),
     candidates: join(dir, 'candidates.jsonl'),
     check: join(dir, 'check.jsonl'),
@@ -100,4 +110,10 @@ export async function writeAtomic(path: string, content: string): Promise<void> 
   const temporary = `${path}.${process.pid}.tmp`
   await writeFile(temporary, content, { mode: 0o600 })
   await rename(temporary, path)
+}
+
+// Appends one line to an append-only JSON Lines log, such as the replay's runs.jsonl.
+export async function appendJsonl(path: string, row: unknown): Promise<void> {
+  await mkdir(join(path, '..'), { recursive: true, mode: 0o700 })
+  await appendFile(path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
 }

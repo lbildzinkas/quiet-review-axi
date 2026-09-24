@@ -1,14 +1,65 @@
-import pack from './question-pack.json' with { type: 'json' }
+import { z } from 'zod'
+import { validationError } from '../errors.js'
+import builtInPack from './question-pack.json' with { type: 'json' }
 
-// The Jev question wording lives only in question-pack.json (spec 5.4). Code fills the
+// The Jev question wording lives only in question packs (spec 5.4.5): the built-in
+// question-pack.json, or a candidate pack file checked by the regression gate. Code fills the
 // placeholders with item keys; it never adds comment text to instructions.
 export type Question = Record<string, unknown> & { type: 'noul' | 'choice' | 'score' }
 
-export const QUESTION_PACK_VERSION: string = pack.version
+const text = z.string().min(1)
+const questionPackSchema = z.object({
+  // Also names files (the gate's record), so it is a plain token such as v0.2.
+  version: z.string().regex(/^[\w.-]+$/, 'must be letters, digits, dots, dashes or underscores'),
+  placeholders: z.record(z.string(), z.string()).optional(),
+  questions: z
+    .object({
+      act: z
+        .object({
+          type: z.literal('noul'),
+          instructions: z.union([text, z.record(z.string(), text)]),
+          criteria: z.object({ true: text, false: text }).strict(),
+        })
+        .strict(),
+      cat: z
+        .object({
+          type: z.literal('choice'),
+          instructions: text,
+          criteria: z.record(
+            z.string(),
+            z.object({ what: text, not_for: text.optional() }).strict(),
+          ),
+        })
+        .strict(),
+      sev: z
+        .object({ type: z.literal('score'), instructions: text, criteria: z.array(text).min(2) })
+        .strict(),
+      dup: z
+        .object({ type: z.literal('choice'), instructions: text, candidate: text, none: text })
+        .strict(),
+    })
+    .strict(),
+})
+
+export type QuestionPack = z.infer<typeof questionPackSchema>
+
+export const BUILT_IN_PACK: QuestionPack = questionPackSchema.parse(builtInPack)
+export const QUESTION_PACK_VERSION: string = BUILT_IN_PACK.version
+
+// Validates a candidate pack file's structure. Its wording is judged by the replay gate.
+export function parseQuestionPack(raw: unknown, source: string): QuestionPack {
+  const parsed = questionPackSchema.safeParse(raw)
+  if (parsed.success) return parsed.data
+  const issue = parsed.error.issues[0]
+  throw validationError(
+    `Invalid question pack ${source}: ${issue?.path.join('.') || '(root)'} ${issue?.message ?? ''}`.trim(),
+  )
+}
 
 export function itemQuestions(
   itemKey: string,
   duplicateCandidates: string[],
+  pack: QuestionPack = BUILT_IN_PACK,
 ): Record<string, Question> {
   const fill = (value: unknown) => fillPlaceholders(value, { '{item}': itemKey })
   const questions: Record<string, Question> = {
@@ -22,7 +73,7 @@ export function itemQuestions(
   for (const key of duplicateCandidates) criteria[key] = candidate.replaceAll('{candidate}', key)
   criteria.none = none
   questions[`${itemKey}_dup`] = {
-    type: type as 'choice',
+    type,
     instructions: fill(instructions),
     criteria,
   }

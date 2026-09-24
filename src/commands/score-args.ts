@@ -86,7 +86,7 @@ function parseFlags(args: string[]) {
   }
 }
 
-function parseProvider(value: string | undefined): ProviderName | undefined {
+export function parseProvider(value: string | undefined): ProviderName | undefined {
   if (value === undefined || value === 'openrouter' || value === 'typesafe') return value
   throw validationError(`--provider must be openrouter or typesafe, not ${value}`)
 }

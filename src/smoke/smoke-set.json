@@ -1,0 +1,190 @@
+{
+  "version": "v1",
+  "description": "Unmistakable review comments with loose bounds, run by hand with a real key after a Jev model update or before a release (spec 5.4.5). Never run in automated checks.",
+  "bounds": {
+    "real_at_least": 0.7,
+    "noise_below": 0.3
+  },
+  "examples": [
+    {
+      "id": "real-sql-injection",
+      "expect": "real",
+      "title": "Look up a user by name",
+      "path": "src/users.ts",
+      "lines": "14",
+      "hunk": "@@ -10,3 +10,6 @@ export async function findUser(db, name) {\n+  const sql = \"SELECT * FROM users WHERE name = '\" + name + \"'\"\n+  return db.query(sql)\n+}",
+      "body": "`name` comes straight from the request and is concatenated into the SQL string, so a name like `' OR '1'='1` returns every user (SQL injection). Use a parameterized query: `db.query('SELECT * FROM users WHERE name = $1', [name])`."
+    },
+    {
+      "id": "real-null-dereference",
+      "expect": "real",
+      "title": "Show the display name in the header",
+      "path": "src/header.ts",
+      "lines": "22",
+      "hunk": "@@ -18,3 +18,5 @@ export function header(user: User) {\n+  // profile is optional on User\n+  return `Hello, ${user.profile.displayName}`\n+}",
+      "body": "`user.profile` is optional (see the comment above and the `User` type), so this throws `TypeError: Cannot read properties of undefined` for every user without a profile. Guard it, for example `user.profile?.displayName ?? user.login`."
+    },
+    {
+      "id": "real-off-by-one",
+      "expect": "real",
+      "title": "Sum the order lines",
+      "path": "src/orders.ts",
+      "lines": "31",
+      "hunk": "@@ -28,3 +28,7 @@ export function total(lines: Line[]) {\n+  let sum = 0\n+  for (let i = 0; i <= lines.length; i++) sum += lines[i].price\n+  return sum\n+}",
+      "body": "The loop runs to `i <= lines.length`, one past the last index, so `lines[lines.length]` is `undefined` and `.price` throws on every call. Use `i < lines.length`."
+    },
+    {
+      "id": "real-secret-logged",
+      "expect": "real",
+      "title": "Add debug logging to the webhook sender",
+      "path": "src/webhook.ts",
+      "lines": "41",
+      "hunk": "@@ -38,3 +38,6 @@ export async function send(event, config) {\n+  const signature = sign(event, config.signingSecret)\n+  logger.debug(`signing with ${config.signingSecret}`)\n+  return post(config.url, event, signature)",
+      "body": "This writes the webhook signing secret to the debug log in plain text; anyone with log access can forge signed events. Log that signing happened, not the secret."
+    },
+    {
+      "id": "real-missing-await",
+      "expect": "real",
+      "title": "Save settings before closing the dialog",
+      "path": "src/settings.ts",
+      "lines": "57",
+      "hunk": "@@ -52,3 +52,7 @@ export async function saveAndClose(store, dialog, settings) {\n+  store.write(settings)\n+  dialog.close()\n+  process.exit(0)\n+}",
+      "body": "`store.write` returns a promise that is not awaited, and `process.exit(0)` runs right after, so the write is usually cut off and the user's settings are lost. `await store.write(settings)` before closing and exiting."
+    },
+    {
+      "id": "real-assignment-in-condition",
+      "expect": "real",
+      "title": "Skip empty batches",
+      "path": "src/batch.js",
+      "lines": "12",
+      "hunk": "@@ -9,3 +9,6 @@ function processBatch(batch) {\n+  if (batch.length = 0) {\n+    return []\n+  }\n+  return batch.map(transform)",
+      "body": "`batch.length = 0` assigns instead of comparing: it empties every batch and the condition is always falsy, so every call returns an empty result. Use `batch.length === 0`."
+    },
+    {
+      "id": "real-swallowed-error",
+      "expect": "real",
+      "title": "Report payment status",
+      "path": "src/payments.ts",
+      "lines": "73",
+      "hunk": "@@ -68,3 +68,9 @@ export async function charge(card, amount) {\n+  try {\n+    await gateway.charge(card, amount)\n+  } catch (error) {\n+  }\n+  return { status: 'paid' }\n+}",
+      "body": "The empty `catch` swallows gateway failures and the function still returns `{ status: 'paid' }`, so a declined card is recorded as paid and the order ships without payment. Return or rethrow the failure."
+    },
+    {
+      "id": "real-infinite-retry",
+      "expect": "real",
+      "title": "Retry failed uploads",
+      "path": "src/upload.ts",
+      "lines": "88",
+      "hunk": "@@ -84,3 +84,9 @@ export async function upload(file) {\n+  let attempt = 0\n+  while (attempt < MAX_ATTEMPTS) {\n+    if (await tryUpload(file)) return true\n+    await sleep(backoff(attempt))\n+  }\n+  return false",
+      "body": "`attempt` is never incremented, so a permanently failing upload retries forever and the request never finishes. Add `attempt++` inside the loop."
+    },
+    {
+      "id": "real-path-traversal",
+      "expect": "real",
+      "title": "Serve uploaded files",
+      "path": "src/files.ts",
+      "lines": "19",
+      "hunk": "@@ -15,3 +15,6 @@ app.get('/files/:name', (req, res) => {\n+  const path = join(UPLOAD_DIR, req.params.name)\n+  res.sendFile(path)\n+})",
+      "body": "`req.params.name` is not validated, so a request for `..%2F..%2Fetc%2Fpasswd` resolves outside `UPLOAD_DIR` and serves any file the server can read (path traversal). Reject names containing path separators or check the resolved path stays inside `UPLOAD_DIR`."
+    },
+    {
+      "id": "real-wrong-unit",
+      "expect": "real",
+      "title": "Expire sessions after 30 minutes",
+      "path": "src/session.ts",
+      "lines": "9",
+      "hunk": "@@ -6,3 +6,5 @@ export const SESSION_TTL_MS = 30\n+\n+export function isExpired(session, now = Date.now()) {\n+  return now - session.createdAt > SESSION_TTL_MS",
+      "body": "`SESSION_TTL_MS` is 30, which is 30 milliseconds, not 30 minutes, so every session expires almost immediately and users are logged out on their next request. Use `30 * 60 * 1000`."
+    },
+    {
+      "id": "noise-praise",
+      "expect": "noise",
+      "title": "Add retry to webhook sender",
+      "path": "src/webhook.ts",
+      "lines": "60",
+      "hunk": "@@ -55,3 +55,8 @@ export async function send(event, config) {\n+  for (let attempt = 0; attempt < 3; attempt++) {\n+    if (await post(config.url, event)) return true\n+    await sleep(500 * 2 ** attempt)\n+  }\n+  return false",
+      "body": "Nice work! This retry logic with exponential backoff looks great and makes the sender much more robust."
+    },
+    {
+      "id": "noise-lgtm",
+      "expect": "noise",
+      "title": "Bump the lint config",
+      "path": "eslint.config.js",
+      "lines": "4",
+      "hunk": "@@ -1,3 +1,4 @@ export default [\n   js.configs.recommended,\n+  prettier,\n ]",
+      "body": "LGTM 👍"
+    },
+    {
+      "id": "noise-summary",
+      "expect": "noise",
+      "title": "Refactor the cache layer",
+      "path": "src/cache.ts",
+      "lines": "12",
+      "hunk": "@@ -8,3 +8,9 @@ export class Cache {\n+  get(key: string) {\n+    return this.entries.get(key)?.value\n+  }\n+  set(key: string, value: unknown) {\n+    this.entries.set(key, { value, at: Date.now() })\n+  }",
+      "body": "This change adds `get` and `set` methods to the `Cache` class. `get` returns the stored value for a key and `set` stores a value together with the time it was written."
+    },
+    {
+      "id": "noise-question",
+      "expect": "noise",
+      "title": "Switch the queue to a ring buffer",
+      "path": "src/queue.ts",
+      "lines": "27",
+      "hunk": "@@ -24,3 +24,6 @@ export class Queue {\n+  private buffer = new RingBuffer(1024)\n+  push(item) {\n+    this.buffer.write(item)\n+  }",
+      "body": "Just curious, what made you pick a ring buffer here? I haven't used one in this codebase before."
+    },
+    {
+      "id": "noise-generic-advice",
+      "expect": "noise",
+      "title": "Add the export button",
+      "path": "src/export.ts",
+      "lines": "8",
+      "hunk": "@@ -5,3 +5,6 @@ export function ExportButton({ onExport }) {\n+  return <button onClick={onExport}>Export</button>\n+}",
+      "body": "In general it is good practice to write thorough tests and documentation for all new features and to follow the team's coding standards."
+    },
+    {
+      "id": "noise-wrong-claim",
+      "expect": "noise",
+      "title": "Handle empty carts",
+      "path": "src/cart.ts",
+      "lines": "16",
+      "hunk": "@@ -12,3 +12,8 @@ export function firstItemName(cart: Cart) {\n+  if (cart.items.length === 0) return null\n+  return cart.items[0].name\n+}",
+      "body": "This will crash with an index error when the cart is empty, because `cart.items[0]` is undefined."
+    },
+    {
+      "id": "noise-thanks",
+      "expect": "noise",
+      "title": "Update the README",
+      "path": "README.md",
+      "lines": "30",
+      "hunk": "@@ -27,3 +27,5 @@ ## Install\n+\n+Run `npm install` and then `npm run build`.",
+      "body": "Thanks for updating the README!"
+    },
+    {
+      "id": "noise-restatement",
+      "expect": "noise",
+      "title": "Rename the config loader",
+      "path": "src/config.ts",
+      "lines": "5",
+      "hunk": "@@ -2,3 +2,4 @@ import { readFile } from 'node:fs/promises'\n-export async function load(path) {\n+export async function loadConfig(path) {",
+      "body": "The function `load` has been renamed to `loadConfig`."
+    },
+    {
+      "id": "noise-taste",
+      "expect": "noise",
+      "title": "Add the date helper",
+      "path": "src/dates.ts",
+      "lines": "11",
+      "hunk": "@@ -8,3 +8,6 @@ export function formatDate(date: Date) {\n+  const year = date.getUTCFullYear()\n+  return `${year}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`\n+}",
+      "body": "Personally I prefer arrow functions over function declarations, but either is fine."
+    },
+    {
+      "id": "noise-walkthrough",
+      "expect": "noise",
+      "title": "Add pagination to the list endpoint",
+      "path": "src/routes/list.ts",
+      "lines": "40",
+      "hunk": "@@ -36,3 +36,8 @@ router.get('/items', async (req, res) => {\n+  const page = Number(req.query.page ?? 1)\n+  const items = await repo.list({ offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE })\n+  res.json({ page, items })\n+})",
+      "body": "Walkthrough: the `/items` route now reads a `page` query parameter, lists one page of items from the repository, and returns the page number with the items."
+    }
+  ]
+}

@@ -256,7 +256,7 @@ export function roundCost(value: number): number {
   return Number(value.toFixed(6))
 }
 
-function resumeLimit(maxCost: number): string {
+export function resumeLimit(maxCost: number): string {
   return String(Math.max(0.5, maxCost * 2))
 }
 

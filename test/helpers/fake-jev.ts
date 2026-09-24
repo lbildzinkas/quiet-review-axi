@@ -9,7 +9,10 @@ export interface ScriptedItem {
 
 export interface FakeJevOptions {
   items?: Record<string, ScriptedItem>
-  snapshot?: string
+  // Scripts an item by its comment text in the request state, for requests that reuse keys.
+  byComment?: (comment: string) => ScriptedItem | undefined
+  // A fixed snapshot, or one per call (1-based call number).
+  snapshot?: string | ((call: number) => string)
   // Returns the reported `usage.cost`; `null` omits it from the response.
   cost?: (inputTokens: number) => number | null
   inputTokens?: number
@@ -28,11 +31,19 @@ const SEVERITY_LEVELS = 5
 // from per-item scripts keyed by the item key used in the question ids (`c1_act` -> `c1`).
 export function createFakeJev(options: FakeJevOptions = {}) {
   const calls: RecordedJevCall[] = []
-  const snapshot = options.snapshot ?? 'typesafe/jev-1.13-20260917'
+  const snapshotFor = (call: number) =>
+    typeof options.snapshot === 'function'
+      ? options.snapshot(call)
+      : (options.snapshot ?? 'typesafe/jev-1.13-20260917')
 
-  function answer(questionId: string, question: { type: string; criteria?: unknown }) {
+  function answer(
+    questionId: string,
+    question: { type: string; criteria?: unknown },
+    comments: Record<string, { comment?: string }>,
+  ) {
     const [key, kind] = splitQuestionId(questionId)
-    const script = options.items?.[key] ?? { act: 0.5 }
+    const script = options.byComment?.(comments[key]?.comment ?? '') ??
+      options.items?.[key] ?? { act: 0.5 }
     if (kind === 'act') return { type: 'noul', noul: script.act }
     if (kind === 'sev') return scoreAnswer(script.sev ?? 1)
     const optionsList = Object.keys((question.criteria ?? {}) as Record<string, unknown>)
@@ -43,17 +54,24 @@ export function createFakeJev(options: FakeJevOptions = {}) {
   async function handle(url: string, init: RequestInit): Promise<Response> {
     const body = String(init.body)
     const json = JSON.parse(body) as {
+      state: { comments?: Record<string, { comment?: string }> }
       questions: Record<string, { type: string; criteria?: unknown }>
     }
     calls.push({ url, headers: headersToRecord(init.headers), body, json })
+    const comments = json.state.comments ?? {}
     const answers = Object.fromEntries(
-      Object.entries(json.questions).map(([id, question]) => [id, answer(id, question)]),
+      Object.entries(json.questions).map(([id, question]) => [id, answer(id, question, comments)]),
     )
     const inputTokens = options.inputTokens ?? Math.ceil(body.length / 4)
     const cost = options.cost ? options.cost(inputTokens) : inputTokens * 0.042e-6
     const usage: Record<string, number> = { input_tokens: inputTokens, output_tokens: 10 }
     if (cost !== null) usage.cost = cost
-    return jsonResponse(200, { id: `gen-dec-${calls.length}`, model: snapshot, answers, usage })
+    return jsonResponse(200, {
+      id: `gen-dec-${calls.length}`,
+      model: snapshotFor(calls.length),
+      answers,
+      usage,
+    })
   }
 
   return { calls, handle }

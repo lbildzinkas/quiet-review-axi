@@ -107,6 +107,8 @@ export async function runLabelModel(options: LabelModelOptions): Promise<LabelMo
       unlabelled.push(item.id)
       continue
     }
+    // The key comes first: a run without one fails with MISSING_KEY, not a price lookup.
+    const apiKey = options.apiKey()
     pricing ??= await fetchPricing(options)
     if (!options.budget.canAffordUsd(estimateCostUsd(body, pricing))) {
       unlabelled.push(item.id)
@@ -119,7 +121,7 @@ export async function runLabelModel(options: LabelModelOptions): Promise<LabelMo
         { name: PROVIDER, endpoint: CHAT_ENDPOINT, keyEnv: KEY_ENV, timeoutMs: CHAT_TIMEOUT_MS },
         JSON.stringify(body),
         {
-          apiKey: options.apiKey(),
+          apiKey,
           fetch: options.fetch,
           sleep: options.sleep,
           random: options.random,

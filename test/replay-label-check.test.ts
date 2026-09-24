@@ -110,7 +110,7 @@ describe('replay label check (spec 10.6)', () => {
     const { sandbox, gitHub } = setupReplay()
     const labelModel = createFakeLabelModel({ answer: automaticLabel })
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain(
@@ -124,14 +124,14 @@ describe('replay label check (spec 10.6)', () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
     const labelModel = createFakeLabelModel({ answer: TWO_TO_REVIEW })
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain(
       'check,waiting,"10 sampled, AI agreement 0.89 (kappa 0.78), 2 await review"',
     )
     expect(result.stdout).toContain('review.jsonl')
-    expect(result.stdout).toContain('--stage check')
+    expect(result.stdout).toContain('to record the reviewed labels')
     const review = readJsonl(reviewFile(sandbox))
     expect(review.map((line) => [line.automatic_label, line.ai_label, line.label])).toEqual([
       ['real', 'noise', null],
@@ -154,7 +154,9 @@ describe('replay label check (spec 10.6)', () => {
 
   it('reads the maintainer labels back from review.jsonl and combines them with the agreed labels', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
-    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
     fillReview(sandbox, { 1: 'noise' })
     const partly = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
     fillReview(sandbox, { 2: 'noise' })
@@ -181,7 +183,9 @@ describe('replay label check (spec 10.6)', () => {
 
   it('refuses a review label other than real, noise or excluded, naming the line', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
-    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
     fillReview(sandbox, { 2: 'maybe' })
 
     const result = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
@@ -195,7 +199,9 @@ describe('replay label check (spec 10.6)', () => {
 
   it('refuses a review line that is not a JSON object', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
-    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
     appendFileSync(replayPath(sandbox, 'review.jsonl'), 'null\n')
 
     const result = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
@@ -210,7 +216,7 @@ describe('replay label check (spec 10.6)', () => {
     rmSync(replayPath(sandbox, 'check.jsonl'))
     const labelModel = createFakeLabelModel()
 
-    const again = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    const again = await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     expect(again.stdout).toBe(first.stdout)
     expect(labelModel.chatCalls).toHaveLength(0)
@@ -219,7 +225,9 @@ describe('replay label check (spec 10.6)', () => {
 
   it('refuses a review file that lost the line of an item awaiting review', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
-    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
     const path = replayPath(sandbox, 'review.jsonl')
     writeFileSync(path, readFileSync(path, 'utf8').split('\n')[0] + '\n')
 
@@ -231,7 +239,9 @@ describe('replay label check (spec 10.6)', () => {
 
   it('updates the final labels when the maintainer changes a label after the review was complete', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
-    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
     fillReview(sandbox, { 1: 'real', 2: 'noise' })
     await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
     fillReview(sandbox, { 1: 'excluded' })
@@ -254,7 +264,7 @@ describe('label-check trust gate (spec 10.6 step 6)', () => {
       answer: (id) => (prOf(id) <= 3 ? 'unsure' : prOf(id) <= 6 ? flip(id) : automaticLabel(id)),
     })
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     expect(result.stdout).toContain(
       'check,waiting,"10 sampled, AI agreement 0.57 (kappa 0.16), 6 await review"',
@@ -265,12 +275,9 @@ describe('label-check trust gate (spec 10.6 step 6)', () => {
 
   it('waits for the review before trusting the labels, then trusts them when few are overturned', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
-    const waiting = await runReplay(
-      ['public-v1'],
-      sandbox,
-      gitHub,
-      createFakeLabelModel({ answer: TWO_TO_REVIEW }),
-    )
+    const waiting = await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
     fillReview(sandbox, { 1: 'real', 2: 'noise' })
 
     const reviewed = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
@@ -281,7 +288,9 @@ describe('label-check trust gate (spec 10.6 step 6)', () => {
 
   it('reports inconclusive when the maintainer overturns more than 20% of the labels reviewed', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
-    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
     fillReview(sandbox, { 1: 'noise', 2: 'noise' })
 
     const result = await runReplay(['public-v1', '--stage', 'check'], sandbox, gitHub)
@@ -309,7 +318,7 @@ describe('label-model request (spec 10.6 step 2)', () => {
     })
     const labelModel = createFakeLabelModel()
 
-    await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     const call = labelModel.chatCalls[0]
     expect(call?.headers.authorization).toBe(`Bearer ${LABEL_KEY.OPENROUTER_API_KEY}`)
@@ -350,8 +359,8 @@ describe('label-model request (spec 10.6 step 2)', () => {
     const firstModel = createFakeLabelModel()
     const secondModel = createFakeLabelModel()
 
-    await runReplay(['public-v1'], first.sandbox, first.gitHub, firstModel)
-    await runReplay(['public-v1'], second.sandbox, second.gitHub, secondModel)
+    await runReplay(['public-v1'], first.sandbox, first.gitHub, { labelModel: firstModel })
+    await runReplay(['public-v1'], second.sandbox, second.gitHub, { labelModel: secondModel })
 
     expect(secondModel.chatCalls.map((call) => call.body)).toEqual(
       firstModel.chatCalls.map((call) => call.body),
@@ -364,10 +373,10 @@ describe('label-model calls: log, cache and cost (spec 9.2, 9.3)', () => {
     const { sandbox, gitHub } = setupReplay()
     const labelModel = createFakeLabelModel({ snapshot: 'example/label-model-20260901' })
 
-    await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     const logPath = join(sandbox.env.XDG_STATE_HOME, 'quiet-review-axi', 'calls.jsonl')
-    const lines = readJsonl(logPath)
+    const lines = readJsonl(logPath).filter((line) => line.prompt === 'label-check-v1')
     expect(lines).toHaveLength(4)
     expect(lines[0]).toMatchObject({
       command: 'replay',
@@ -391,11 +400,15 @@ describe('label-model calls: log, cache and cost (spec 9.2, 9.3)', () => {
     rmSync(replayPath(sandbox, 'manifest.json'))
     const labelModel = createFakeLabelModel()
 
-    const again = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    const again = await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     expect(labelModel.chatCalls).toHaveLength(0)
-    expect(again.stdout).toBe(first.stdout)
-    const lines = readJsonl(join(sandbox.env.XDG_STATE_HOME, 'quiet-review-axi', 'calls.jsonl'))
+    const checkFacts = (stdout: string) =>
+      stdout.split('\n').filter((line) => /^\s*check,|^label_|^trust/.test(line))
+    expect(checkFacts(again.stdout)).toEqual(checkFacts(first.stdout))
+    const lines = readJsonl(
+      join(sandbox.env.XDG_STATE_HOME, 'quiet-review-axi', 'calls.jsonl'),
+    ).filter((line) => line.prompt === 'label-check-v1')
     expect(lines.slice(4).map((line) => [line.cached, line.cost_usd])).toEqual(
       Array(4).fill([true, 0]),
     )
@@ -422,20 +435,14 @@ describe('label-check budget (spec 9.4)', () => {
   it('stops before a call that could pass --max-cost, exits 3, and a re-run pays only for the rest', async () => {
     const { sandbox, gitHub } = setupReplay()
     const firstModel = createFakeLabelModel(PRICED)
-    const stopped = await runReplay(
-      ['public-v1', '--max-cost', '0.03'],
-      sandbox,
-      gitHub,
-      firstModel,
-    )
+    const stopped = await runReplay(['public-v1', '--max-cost', '0.03'], sandbox, gitHub, {
+      labelModel: firstModel,
+    })
     const secondModel = createFakeLabelModel(PRICED)
 
-    const resumed = await runReplay(
-      ['public-v1', '--max-cost', '0.5'],
-      sandbox,
-      gitHub,
-      secondModel,
-    )
+    const resumed = await runReplay(['public-v1', '--max-cost', '0.5'], sandbox, gitHub, {
+      labelModel: secondModel,
+    })
 
     expect(stopped.exitCode).toBe(3)
     expect(stopped.stdout).toContain('check,stopped,"2 of 4 labelled, stopped at --max-cost 0.03"')
@@ -447,7 +454,7 @@ describe('label-check budget (spec 9.4)', () => {
     expect(firstModel.chatCalls).toHaveLength(2)
     expect(resumed.exitCode).toBe(0)
     expect(secondModel.chatCalls).toHaveLength(2)
-    expect(resumed.stdout).toContain('check,waiting,"4 sampled')
+    expect(resumed.stdout).toContain('check,done,"4 sampled')
     expect(resumed.stdout).toContain('label_check_cost_usd: 0.04')
   })
 
@@ -455,7 +462,8 @@ describe('label-check budget (spec 9.4)', () => {
     const { sandbox, gitHub } = setupReplay()
     const labelModel = createFakeLabelModel()
 
-    const result = await runReplay(['public-v1', '--max-cost', '0'], sandbox, gitHub, labelModel, {
+    const result = await runReplay(['public-v1', '--max-cost', '0'], sandbox, gitHub, {
+      labelModel,
       env: { OPENROUTER_API_KEY: '' },
     })
 
@@ -471,7 +479,7 @@ describe('label-check budget (spec 9.4)', () => {
       models: { 'other/model': PRICED.models['example/label-model'] },
     })
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     expect(result.exitCode).toBe(2)
     expect(result.stdout).toContain('code: VALIDATION_ERROR')
@@ -483,18 +491,12 @@ describe('label-check budget (spec 9.4)', () => {
     const noCompletion = setupReplay()
     const unpriced = setupReplay()
 
-    const partial = await runReplay(
-      ['public-v1'],
-      noCompletion.sandbox,
-      noCompletion.gitHub,
-      createFakeLabelModel({ models: { 'example/label-model': { prompt: '0' } } }),
-    )
-    const empty = await runReplay(
-      ['public-v1'],
-      unpriced.sandbox,
-      unpriced.gitHub,
-      createFakeLabelModel({ models: { 'example/label-model': {} } }),
-    )
+    const partial = await runReplay(['public-v1'], noCompletion.sandbox, noCompletion.gitHub, {
+      labelModel: createFakeLabelModel({ models: { 'example/label-model': { prompt: '0' } } }),
+    })
+    const empty = await runReplay(['public-v1'], unpriced.sandbox, unpriced.gitHub, {
+      labelModel: createFakeLabelModel({ models: { 'example/label-model': {} } }),
+    })
 
     for (const result of [partial, empty]) {
       expect(result.exitCode).toBe(2)
@@ -508,30 +510,26 @@ describe('label-check budget (spec 9.4)', () => {
     const variableRequest = setupReplay()
     const overflowing = setupReplay()
 
-    const empty = await runReplay(
-      ['public-v1'],
-      emptyPrompt.sandbox,
-      emptyPrompt.gitHub,
-      createFakeLabelModel({
+    const empty = await runReplay(['public-v1'], emptyPrompt.sandbox, emptyPrompt.gitHub, {
+      labelModel: createFakeLabelModel({
         models: { 'example/label-model': { prompt: '', completion: '0.00001' } },
       }),
-    )
+    })
     const variable = await runReplay(
       ['public-v1'],
       variableRequest.sandbox,
       variableRequest.gitHub,
-      createFakeLabelModel({
-        models: { 'example/label-model': { prompt: '0', completion: '0.00001', request: '-1' } },
-      }),
+      {
+        labelModel: createFakeLabelModel({
+          models: { 'example/label-model': { prompt: '0', completion: '0.00001', request: '-1' } },
+        }),
+      },
     )
-    const huge = await runReplay(
-      ['public-v1'],
-      overflowing.sandbox,
-      overflowing.gitHub,
-      createFakeLabelModel({
+    const huge = await runReplay(['public-v1'], overflowing.sandbox, overflowing.gitHub, {
+      labelModel: createFakeLabelModel({
         models: { 'example/label-model': { prompt: '0', completion: '9'.repeat(400) } },
       }),
-    )
+    })
 
     for (const result of [empty, variable, huge]) {
       expect(result.exitCode).toBe(2)
@@ -548,13 +546,12 @@ describe('label-check budget (spec 9.4)', () => {
       models: { 'openrouter/auto': variable, ...PRICED.models },
     })
 
-    const ok = await runReplay(['public-v1'], fixed.sandbox, fixed.gitHub, fixedModel)
-    const refused = await runReplay(
-      ['public-v1'],
-      unpriced.sandbox,
-      unpriced.gitHub,
-      createFakeLabelModel({ models: { 'example/label-model': variable } }),
-    )
+    const ok = await runReplay(['public-v1'], fixed.sandbox, fixed.gitHub, {
+      labelModel: fixedModel,
+    })
+    const refused = await runReplay(['public-v1'], unpriced.sandbox, unpriced.gitHub, {
+      labelModel: createFakeLabelModel({ models: { 'example/label-model': variable } }),
+    })
 
     expect(ok.exitCode).toBe(0)
     expect(fixedModel.chatCalls).toHaveLength(4)
@@ -565,7 +562,8 @@ describe('label-check budget (spec 9.4)', () => {
   it('needs an OpenRouter key for a paid call', async () => {
     const { sandbox, gitHub } = setupReplay()
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel(), {
+    const result = await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel(),
       env: { OPENROUTER_API_KEY: '' },
     })
 
@@ -586,7 +584,7 @@ describe('label-model answers and failures', () => {
         })[prOf(id)] ?? automaticLabel(id),
     })
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('1 await review')
@@ -610,7 +608,7 @@ describe('label-model answers and failures', () => {
         })[prOf(id)] ?? automaticLabel(id),
     })
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('2 await review')
@@ -630,7 +628,7 @@ describe('label-model answers and failures', () => {
       }),
     })
 
-    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+    const result = await runReplay(['public-v1'], sandbox, gitHub, { labelModel })
 
     expect(result.exitCode).toBe(4)
     expect(result.stdout).toContain('code: PROVIDER_AUTH')
@@ -643,12 +641,9 @@ describe('label-model answers and failures', () => {
 
   it('writes neither the OpenRouter key nor the GitHub token anywhere on a full run', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
-    const result = await runReplay(
-      ['public-v1'],
-      sandbox,
-      gitHub,
-      createFakeLabelModel({ answer: TWO_TO_REVIEW }),
-    )
+    const result = await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
     fillReview(sandbox, { 1: 'real', 2: 'noise' })
     const reviewed = await runReplay(['public-v1', '--stage', 'check', '--json'], sandbox, gitHub)
 
@@ -680,14 +675,16 @@ describe('check stage runs', () => {
     rmSync(replayPath(sandbox, 'manifest.json'))
     const labelModel = createFakeLabelModel()
 
-    await runReplay(['public-v1', '--no-cache'], sandbox, gitHub, labelModel)
+    await runReplay(['public-v1', '--no-cache'], sandbox, gitHub, { labelModel })
 
     expect(labelModel.chatCalls).toHaveLength(4)
   })
 
   it('keeps the maintainer labels when changed inputs make the sample be relabelled', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
-    await runReplay(['public-v1'], sandbox, gitHub, createFakeLabelModel({ answer: TWO_TO_REVIEW }))
+    await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
     fillReview(sandbox, { 1: 'noise' })
     // The same items with a trailing blank line: new input hashes, the same data.
     appendFileSync(replayPath(sandbox, 'items.jsonl'), '\n')
@@ -704,12 +701,9 @@ describe('check stage runs', () => {
   it('emits the label check facts in --json', async () => {
     const { sandbox, gitHub } = setupReplay(ALL_TEN)
 
-    const result = await runReplay(
-      ['public-v1', '--json'],
-      sandbox,
-      gitHub,
-      createFakeLabelModel({ answer: TWO_TO_REVIEW }),
-    )
+    const result = await runReplay(['public-v1', '--json'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
 
     const document = JSON.parse(result.stdout) as Record<string, unknown>
     expect(document).toMatchObject({
@@ -730,5 +724,43 @@ describe('check stage runs', () => {
     expect(result.stdout).toContain('review.jsonl')
     expect(result.stdout).toContain('--max-cost <usd>')
     expect(result.stdout).toContain('--no-cache')
+  })
+})
+
+describe('label check with the score and evaluate stages', () => {
+  it('scores and evaluates on the final labels once the review is complete, and not before', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+    const waiting = await runReplay(['public-v1'], sandbox, gitHub, {
+      labelModel: createFakeLabelModel({ answer: TWO_TO_REVIEW }),
+    })
+    fillReview(sandbox, { 1: 'excluded', 2: 'noise' })
+
+    const reviewed = await runReplay(['public-v1'], sandbox, gitHub)
+
+    expect(waiting.stdout).toMatch(/score,done,"10 items/)
+    expect(waiting.stdout).toContain('evaluate,pending')
+    expect(waiting.stdout).toContain('review.jsonl')
+    expect(reviewed.stdout).toContain('check,done')
+    expect(reviewed.stdout).toMatch(/score,done,"9 items/)
+    expect(reviewed.stdout).not.toContain('evaluate,pending')
+  })
+
+  it('shares one --max-cost between the label check and scoring', async () => {
+    const { sandbox, gitHub } = setupReplay()
+    // Each label call is estimated at 1024 * 0.000001 * 1.5 = $0.001536 and reports $0.002, so
+    // the check spends $0.008 of $0.00801 and too little is left for any Jev request.
+    const labelModel = createFakeLabelModel({
+      models: { 'example/label-model': { prompt: '0', completion: '0.000001' } },
+      cost: 0.002,
+    })
+
+    const result = await runReplay(['public-v1', '--max-cost', '0.00801'], sandbox, gitHub, {
+      labelModel,
+    })
+
+    expect(labelModel.chatCalls).toHaveLength(4)
+    expect(result.exitCode).toBe(3)
+    expect(result.stdout).toContain('check,done')
+    expect(result.stdout).toContain('score,stopped,0 of 4 items scored')
   })
 })

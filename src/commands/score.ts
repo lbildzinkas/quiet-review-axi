@@ -9,6 +9,7 @@ import { decideItems } from '../core/verdict.js'
 import { BudgetStop } from '../errors.js'
 import { cacheKey, readCacheEntry } from '../infra/cache.js'
 import {
+  cutoffFiles,
   findApiKey,
   loadRepoConfig,
   loadUserConfig,
@@ -53,6 +54,7 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
     flags: { collapseBelow: options.collapseBelow, keepAt: options.keepAt },
     repoConfig: repoConfig.cutoffs,
     userConfig: userConfig.cutoffs,
+    files: cutoffFiles(context),
   })
   const provider = PROVIDERS[options.provider ?? userConfig.provider ?? 'openrouter']
   const input =
@@ -91,6 +93,7 @@ export async function scoreCommand(args: string[], context: AppContext): Promise
 
   const run = await runRequests({
     command: 'score',
+    questionPack: QUESTION_PACK_VERSION,
     runId: `r-${randomBytes(4).toString('hex')}`,
     provider,
     requests,

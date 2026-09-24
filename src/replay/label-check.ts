@@ -1,7 +1,8 @@
 import { cleanBody } from '../core/items.js'
 import type { DrawnItem } from './build.js'
 import type { Label } from './label.js'
-import { seededRandom, shuffle } from './sample.js'
+import { seededRandom } from '../calibration/random.js'
+import { shuffle } from './sample.js'
 import prompt from './label-prompt.json' with { type: 'json' }
 
 // The label check (spec 10.6): an independent AI label on a sample of the automatic labels.

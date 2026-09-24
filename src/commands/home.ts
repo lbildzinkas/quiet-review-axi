@@ -1,11 +1,12 @@
-import { readdir, readFile } from 'node:fs/promises'
+import { access, readdir, readFile } from 'node:fs/promises'
 import type { AppContext } from '../context.js'
 import { describeCutoffs, resolveCutoffs } from '../core/cutoffs.js'
-import { findApiKey, loadRepoConfig, loadUserConfig } from '../infra/config.js'
+import { cutoffFiles, findApiKey, loadRepoConfig, loadUserConfig } from '../infra/config.js'
 import { cacheDir, callLogPath } from '../infra/paths.js'
 import { findGitHubToken } from '../inputs/github.js'
 import { PROVIDERS } from '../jev/providers.js'
 import { roundCost } from '../output/render.js'
+import { latestResult, replaysRoot } from './report.js'
 
 // The no-command view (spec 4.3). Credentials show only their source, never their value.
 export async function homeView(context: AppContext): Promise<Record<string, unknown>> {
@@ -14,22 +15,48 @@ export async function homeView(context: AppContext): Promise<Record<string, unkn
   const provider = PROVIDERS[userConfig.provider ?? 'openrouter']
   const key = findApiKey(provider, context.env, userConfig)
   const token = await findGitHubToken(context.env, context.runGhAuthToken)
-  const cutoffs = resolveCutoffs({ repoConfig: repoConfig.cutoffs, userConfig: userConfig.cutoffs })
+  const files = cutoffFiles(context)
+  const cutoffs = resolveCutoffs({
+    repoConfig: repoConfig.cutoffs,
+    userConfig: userConfig.cutoffs,
+    files,
+  })
+  const described = describeCutoffs(cutoffs, [])
+  const lastReplay = await latestResult(replaysRoot(context.cwd))
   return {
     provider: provider.name,
     model: provider.model,
     key: key ? `set (${key.source})` : 'missing',
     github_token: token ? `set (${token.source})` : 'missing',
-    cutoffs: describeCutoffs(cutoffs, []).line,
+    cutoffs: described.line,
+    repo_config: await located(files['repo config']),
+    user_config: await located(files['user config']),
     cache: `${await countCacheEntries(cacheDir(context.env))} entries`,
     spent_today_usd: roundCost(await spentOn(callLogPath(context.env), context.now())),
+    ...(lastReplay === null
+      ? {}
+      : {
+          last_replay: `${lastReplay.replay} ${lastReplay.verdict} auroc=${lastReplay.auroc === null ? 'n/a' : Number(lastReplay.auroc.toFixed(3))}`,
+        }),
+    ...(described.warnings.length === 0 ? {} : { warnings: described.warnings }),
   }
 }
 
 export const HOME_HELP = [
   "Run `quiet-review-axi score <pr-url>` to score a pull request's review comments",
   'Run `quiet-review-axi score --findings <file>` to score a findings file',
+  'Run `quiet-review-axi report` to see the latest replay result',
 ]
+
+// A config file's path, or where it would go when it does not exist yet.
+async function located(path: string): Promise<string> {
+  try {
+    await access(path)
+    return path
+  } catch {
+    return `none (${path})`
+  }
+}
 
 async function countCacheEntries(dir: string): Promise<number> {
   try {

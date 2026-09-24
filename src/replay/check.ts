@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises'
 import { validationError } from '../errors.js'
 import type { DrawnItem } from './build.js'
 import type { Label } from './label.js'
@@ -109,8 +110,11 @@ async function reviewOutcome(
       trust_reasons: trust.reasons,
     },
   }
-  if (!isReviewed)
+  if (!isReviewed) {
+    // Score and evaluate read final-labels.jsonl only while it belongs to a complete review.
+    await rm(options.files.finalLabels, { force: true })
     return { ...record, status: 'waiting', detail: `${summary}, ${pending.length} await review` }
+  }
   await writeAtomic(
     options.files.finalLabels,
     toJsonl(finalLabels(options.labels, rows, maintainer)),

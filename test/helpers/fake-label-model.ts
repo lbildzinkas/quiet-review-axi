@@ -6,7 +6,8 @@ export type ScriptedAnswer = string | { status: number; body?: unknown }
 
 export interface FakeLabelModelOptions {
   // The answer text for a comment, found by the `(#<id>)` marker the replay world puts in every
-  // comment body. Default: a `real` label.
+  // comment body. Default: like the main automatic rule, `real` when the evidence shows a
+  // change at the commented lines and `noise` otherwise, so ordinary fixtures agree.
   answer?: (commentId: number) => ScriptedAnswer
   // Reported `usage.cost`; `null` omits it from the response.
   cost?: number | null
@@ -30,8 +31,13 @@ export function createFakeLabelModel(options: FakeLabelModelOptions = {}) {
   const pricingCalls: string[] = []
   const models = options.models ?? { [LABEL_MODEL]: { prompt: '0.000003', completion: '0.000015' } }
 
+  // Only the model list and chat completions; Jev's decision endpoint is another fake's.
   function matches(url: string) {
-    return url.startsWith('https://openrouter.ai/api/v1/')
+    const path = new URL(url).pathname
+    return (
+      url.startsWith('https://openrouter.ai/') &&
+      (path === '/api/v1/models' || path === '/api/v1/chat/completions')
+    )
   }
 
   async function handle(url: string, init: RequestInit): Promise<Response> {
@@ -51,7 +57,7 @@ export function createFakeLabelModel(options: FakeLabelModelOptions = {}) {
     chatCalls.push({ headers: headersToRecord(init.headers), body, json })
     const text = json.messages.map((message) => message.content).join('\n')
     const commentId = Number(text.match(/\(#(\d+)\)/)?.[1] ?? 0)
-    const scripted = options.answer?.(commentId) ?? 'real'
+    const scripted = options.answer?.(commentId) ?? labelFromEvidence(text)
     if (typeof scripted !== 'string')
       return jsonResponse(scripted.status, scripted.body ?? { error: { code: scripted.status } })
     const usage: Record<string, number> = {
@@ -84,4 +90,9 @@ function labelText(scripted: string): string {
   if (['real', 'noise', 'unsure'].includes(scripted))
     return JSON.stringify({ label: scripted, reason: `The evidence says ${scripted}.` })
   return scripted
+}
+
+// The evidence's `changes_after_comment` is diff hunks when the file changed near the comment.
+function labelFromEvidence(text: string): string {
+  return /"changes_after_comment": "@@/.test(text) ? 'real' : 'noise'
 }

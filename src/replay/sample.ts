@@ -1,3 +1,5 @@
+import { seededRandom } from '../calibration/random.js'
+
 // Capped, stratified, seeded sampling of eligible comments (spec 10.4).
 
 export interface Candidate {
@@ -98,18 +100,6 @@ export function shuffle<T>(items: T[], random: () => number): T[] {
     shuffled[other] = current
   }
   return shuffled
-}
-
-// mulberry32: a small, fast generator; the same seed always gives the same sequence.
-export function seededRandom(seed: number): () => number {
-  let state = seed >>> 0
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0
-    let value = state
-    value = Math.imul(value ^ (value >>> 15), value | 1)
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
-  }
 }
 
 function increment(map: Map<string, number>, key: string) {
