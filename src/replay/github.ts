@@ -251,10 +251,13 @@ function isMissing(error: unknown): boolean {
   return status === 404 || status === 422
 }
 
-// GitHub refuses the contents endpoint for files larger than 100 MB with 403 `too_large`,
-// which is not an access problem: the line count simply cannot be read.
+// GitHub refuses the contents endpoint for files larger than 100 MB with 403, in bodies that
+// name the file `too_large` or "too large"; that is not an access problem: the line count
+// simply cannot be read.
 function isOversized(error: unknown): boolean {
   if ((error as { status?: number }).status !== 403) return false
-  const data = (error as { response?: { data?: unknown } }).response?.data
-  return JSON.stringify(data ?? {}).includes('too_large')
+  const body = JSON.stringify(
+    (error as { response?: { data?: unknown } }).response?.data ?? {},
+  ).toLowerCase()
+  return body.includes('too_large') || body.includes('too large')
 }

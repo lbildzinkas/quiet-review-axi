@@ -48,9 +48,10 @@ export interface FakeReplayWorld {
   pulls: FakePull[]
   // Compare results keyed by `owner/repo:from...to`; missing entries answer 404.
   compares?: Record<string, { merge_base?: string; files: FakeCompareFile[] }>
-  // File contents keyed by `owner/repo:path@ref`; a `{ tooLarge: true }` value answers the
-  // 403 the contents endpoint returns for a file larger than 100 MB.
-  contents?: Record<string, string | { tooLarge: true }>
+  // File contents keyed by `owner/repo:path@ref`; a `{ tooLarge }` value answers the 403 the
+  // contents endpoint returns for a file larger than 100 MB, in one of its observed shapes:
+  // 'code' carries `errors[].code: "too_large"`, 'message' only a human message.
+  contents?: Record<string, string | { tooLarge: 'code' | 'message' }>
 }
 
 // A read-only stand-in for the GitHub REST search, repository, pull, compare and contents
@@ -113,13 +114,7 @@ export function createFakeGitHubReplay(
       const contents =
         world.contents?.[`${fullName}:${contentsMatch[1]}@${parsed.searchParams.get('ref')}`]
       if (contents === undefined) return notFound()
-      if (typeof contents !== 'string')
-        return jsonResponse(403, {
-          message: 'This file is too large to display',
-          documentation_url: 'https://docs.github.com/rest/repos/contents#get-repository-content',
-          status: '403',
-          errors: [{ resource: 'Core', code: 'too_large', message: 'This file is too large' }],
-        })
+      if (typeof contents !== 'string') return tooLarge(contents.tooLarge)
       return jsonResponse(200, {
         type: 'file',
         encoding: 'base64',
@@ -260,4 +255,22 @@ function notFound() {
     message: 'Not Found',
     documentation_url: 'https://docs.github.com/rest',
   })
+}
+
+function tooLarge(shape: 'code' | 'message') {
+  const message =
+    shape === 'code'
+      ? 'The contents of this file cannot be returned'
+      : 'This file is too large to display'
+  return jsonResponse(
+    403,
+    {
+      message,
+      documentation_url: 'https://docs.github.com/rest/repos/contents#get-repository-content',
+      status: '403',
+      ...(shape === 'code'
+        ? { errors: [{ resource: 'Core', code: 'too_large', message }] }
+        : {}),
+    },
+  )
 }
