@@ -45,6 +45,8 @@ export function replayFiles(dir: string) {
     scores: join(dir, 'scores.jsonl'),
     result: join(dir, 'result.json'),
     runs: join(dir, 'runs.jsonl'),
+    // The last regression-gate run for a candidate question pack (spec 5.4.5).
+    gate: (packVersion: string) => join(dir, 'gates', `${packVersion}.json`),
     buildLog: join(dir, 'build-log.jsonl'),
     candidates: join(dir, 'candidates.jsonl'),
     github: join(dir, 'github'),
