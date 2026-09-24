@@ -27,6 +27,8 @@ export interface CheckRow {
   automatic_label: Label
   ai_label: AiLabel
   ai_reason: string
+  // False when the model's answer could not be read and was taken as unsure.
+  ai_readable: boolean
   model: string
   cost_usd: number
 }
@@ -78,8 +80,16 @@ async function reviewOutcome(
     corrected: corrected.length,
     reviewed: toReview.length,
   })
+  const unreadable = rows.filter((row) => !row.ai_readable).length
   const record = {
     completed_at: options.model.now().toISOString(),
+    ...(unreadable === 0
+      ? {}
+      : {
+          warnings: [
+            `the label model gave ${unreadable} ${unreadable === 1 ? 'answer' : 'answers'} that could not be read; ${unreadable === 1 ? 'it is' : 'they are'} marked unsure and ${unreadable === 1 ? 'awaits' : 'await'} review`,
+          ],
+        }),
     counts: {
       sampled: rows.length,
       real: rows.filter((row) => row.automatic_label === 'real').length,
@@ -249,6 +259,7 @@ async function labelSample(
       automatic_label: entry.label,
       ai_label: answer.label,
       ai_reason: answer.reason,
+      ai_readable: answer.readable,
       model: answer.model,
       cost_usd: answer.cost_usd,
     })

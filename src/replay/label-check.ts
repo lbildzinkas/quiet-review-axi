@@ -158,11 +158,37 @@ export function buildLabelRequest(item: DrawnItem, model: string): ChatBody {
 export interface ParsedAnswer {
   label: AiLabel
   reason: string
+  // False when the answer was not the JSON object the prompt asks for; it then counts as
+  // unsure, so the item goes to the maintainer instead of failing a paid run.
+  readable: boolean
 }
 
+const AI_LABELS = new Set<unknown>(['real', 'noise', 'unsure'])
+const MAX_UNREADABLE_CHARACTERS = 200
+
+// Reads the first JSON object in the answer, also when prose or a code fence surrounds it.
 export function parseLabelAnswer(content: string): ParsedAnswer {
-  const parsed = JSON.parse(content) as { label: AiLabel; reason: string }
-  return { label: parsed.label, reason: parsed.reason }
+  const start = content.indexOf('{')
+  const end = content.lastIndexOf('}')
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(content.slice(start, end + 1)) as {
+        label?: unknown
+        reason?: unknown
+      }
+      const label = typeof parsed.label === 'string' ? parsed.label.trim().toLowerCase() : null
+      if (AI_LABELS.has(label))
+        return {
+          label: label as AiLabel,
+          reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+          readable: true,
+        }
+    } catch {
+      // Not JSON after all; reported as unreadable below.
+    }
+  }
+  const text = content.replace(/\s+/g, ' ').trim().slice(0, MAX_UNREADABLE_CHARACTERS)
+  return { label: 'unsure', reason: `Unreadable answer: ${text}`, readable: false }
 }
 
 export interface Agreement {

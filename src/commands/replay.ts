@@ -288,7 +288,10 @@ async function renderReplay(run: ReplayRun): Promise<string> {
     view.trust = labelCheck.trust
     if (labelCheck.trust_reasons.length > 0) view.trust_reasons = labelCheck.trust_reasons
   }
-  const warnings = run.manifest.stages.build?.warnings ?? []
+  const warnings = [
+    ...(run.manifest.stages.build?.warnings ?? []),
+    ...(run.manifest.stages.check?.warnings ?? []),
+  ]
   if (warnings.length > 0) view.warnings = warnings
   const excluded = Object.entries(run.manifest.stages.label?.excluded_by_reason ?? {})
     .sort((a, b) => b[1] - a[1] || compareText(a[0], b[0]))

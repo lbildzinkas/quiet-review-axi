@@ -42,6 +42,7 @@ export interface AiAnswer {
   // The model snapshot that answered and what the answer cost when it was paid for.
   model: string
   cost_usd: number
+  readable: boolean
 }
 
 export interface LabelModelOptions {

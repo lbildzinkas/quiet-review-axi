@@ -466,3 +466,29 @@ describe('label-check budget (spec 9.4)', () => {
     expect(result.stdout).toContain('OPENROUTER_API_KEY')
   })
 })
+
+describe('label-model answers and failures', () => {
+  it('accepts a JSON answer wrapped in prose or a code fence, and sends an unreadable one to review as unsure', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+    const labelModel = createFakeLabelModel({
+      answer: (id) =>
+        ({
+          1: 'Here you go:\n```json\n{"label": "real", "reason": "Fixed at the anchor."}\n```',
+          2: 'I think this one is probably fine.',
+        })[prOf(id)] ?? automaticLabel(id),
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('1 await review')
+    expect(result.stdout).toContain(
+      'the label model gave 1 answer that could not be read; it is marked unsure and awaits review',
+    )
+    expect(readJsonl(replayPath(sandbox, 'review.jsonl'))[0]).toMatchObject({
+      id: 'acme/widgets#2/r1002000',
+      ai_label: 'unsure',
+      ai_reason: 'Unreadable answer: I think this one is probably fine.',
+    })
+  })
+})
