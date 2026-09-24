@@ -12,8 +12,8 @@ export interface FakeLabelModelOptions {
   cost?: number | null
   promptTokens?: number
   completionTokens?: number
-  // The models the pricing list offers, with USD prices per token.
-  models?: Record<string, { prompt: string; completion: string; request?: string }>
+  // The models the pricing list offers, with USD prices per token; a field may be left out.
+  models?: Record<string, { prompt?: string; completion?: string; request?: string }>
   snapshot?: string
 }
 

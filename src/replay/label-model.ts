@@ -182,21 +182,22 @@ async function fetchPricing(options: LabelModelOptions): Promise<Pricing> {
       `The label model ${options.model} in label_check.model is not a model OpenRouter lists`,
       [FROZEN_CONFIG_HELP],
     )
-  const perToken = (field: string) => {
-    const value = Number(entry.pricing?.[field] ?? 0)
-    return Number.isFinite(value) && value >= 0 ? value : null
+  // A listed price is a fixed number of USD per token; an absent field or "-1" (variable)
+  // is no fixed price, and only the request fee may default to free when the list omits it.
+  const fixed = (field: string) => {
+    const listed = entry.pricing?.[field]
+    if (listed === undefined || listed === null) return null
+    const price = Number(listed)
+    return Number.isFinite(price) && price >= 0 ? price : null
   }
-  const pricing = {
-    prompt: perToken('prompt'),
-    completion: perToken('completion'),
-    request: perToken('request'),
-  }
-  if (pricing.prompt === null || pricing.completion === null || pricing.request === null)
+  const prompt = fixed('prompt')
+  const completion = fixed('completion')
+  if (prompt === null || completion === null)
     throw validationError(
       `The label model ${options.model} has no fixed per-token price, so --max-cost cannot bound its calls`,
       [FROZEN_CONFIG_HELP],
     )
-  return { prompt: pricing.prompt, completion: pricing.completion, request: pricing.request }
+  return { prompt, completion, request: fixed('request') ?? 0 }
 }
 
 const FROZEN_CONFIG_HELP =

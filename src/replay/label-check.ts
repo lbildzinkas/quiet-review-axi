@@ -166,13 +166,12 @@ export interface ParsedAnswer {
 const AI_LABELS = new Set<unknown>(['real', 'noise', 'unsure'])
 const MAX_UNREADABLE_CHARACTERS = 200
 
-// Reads the first JSON object in the answer, also when prose or a code fence surrounds it.
+// Reads the first JSON object in the answer that parses and carries a label, also when
+// prose or a code fence surrounds it: braces in that prose belong to no object.
 export function parseLabelAnswer(content: string): ParsedAnswer {
-  const start = content.indexOf('{')
-  const end = content.lastIndexOf('}')
-  if (start !== -1 && end > start) {
+  for (const candidate of objectCandidates(content)) {
     try {
-      const parsed = JSON.parse(content.slice(start, end + 1)) as {
+      const parsed = JSON.parse(candidate) as {
         label?: unknown
         reason?: unknown
       }
@@ -184,11 +183,36 @@ export function parseLabelAnswer(content: string): ParsedAnswer {
           readable: true,
         }
     } catch {
-      // Not JSON after all; reported as unreadable below.
+      // Not a JSON object after all; the next candidate is tried below.
     }
   }
   const text = content.replace(/\s+/g, ' ').trim().slice(0, MAX_UNREADABLE_CHARACTERS)
   return { label: 'unsure', reason: `Unreadable answer: ${text}`, readable: false }
+}
+
+// The span from each `{` to its matching `}`, with braces inside JSON strings ignored, in
+// answer order; a `{` that closes nothing yields no candidate.
+function* objectCandidates(content: string): Generator<string> {
+  for (
+    let start = content.indexOf('{');
+    start !== -1;
+    start = content.indexOf('{', start + 1)
+  ) {
+    let depth = 0
+    let quoted = false
+    let escaped = false
+    for (let index = start; index < content.length; index++) {
+      const character = content[index]
+      if (escaped) escaped = false
+      else if (character === '\\' && quoted) escaped = true
+      else if (character === '"') quoted = !quoted
+      else if (!quoted && character === '{') depth++
+      else if (!quoted && character === '}' && --depth === 0) {
+        yield content.slice(start, index + 1)
+        break
+      }
+    }
+  }
 }
 
 export interface Agreement {

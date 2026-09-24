@@ -479,6 +479,30 @@ describe('label-check budget (spec 9.4)', () => {
     expect(labelModel.chatCalls).toHaveLength(0)
   })
 
+  it('refuses a label model whose prompt or completion price is missing from the list', async () => {
+    const noCompletion = setupReplay()
+    const unpriced = setupReplay()
+
+    const partial = await runReplay(
+      ['public-v1'],
+      noCompletion.sandbox,
+      noCompletion.gitHub,
+      createFakeLabelModel({ models: { 'example/label-model': { prompt: '0' } } }),
+    )
+    const empty = await runReplay(
+      ['public-v1'],
+      unpriced.sandbox,
+      unpriced.gitHub,
+      createFakeLabelModel({ models: { 'example/label-model': {} } }),
+    )
+
+    for (const result of [partial, empty]) {
+      expect(result.exitCode).toBe(2)
+      expect(result.stdout).toContain('code: VALIDATION_ERROR')
+      expect(result.stdout).toContain('has no fixed per-token price')
+    }
+  })
+
   it('reads prices past models with a variable price, and refuses a label model without a fixed price', async () => {
     const variable = { prompt: '-1', completion: '-1' }
     const fixed = setupReplay()
@@ -537,6 +561,27 @@ describe('label-model answers and failures', () => {
       ai_label: 'unsure',
       ai_reason: 'Unreadable answer: I think this one is probably fine.',
     })
+  })
+
+  it('reads the answer when prose with braces surrounds the JSON object', async () => {
+    const { sandbox, gitHub } = setupReplay(ALL_TEN)
+    const labelModel = createFakeLabelModel({
+      answer: (id) =>
+        ({
+          1: '{"label": "noise", "reason": "Style preference"} (nothing {big} to fix)',
+          2: 'Thinking {out loud} first: {"label": "real", "reason": "A fix landed."}',
+        })[prOf(id)] ?? automaticLabel(id),
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub, labelModel)
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('2 await review')
+    expect(result.stdout).not.toContain('could not be read')
+    expect(readJsonl(reviewFile(sandbox)).map((line) => [line.ai_label, line.ai_reason])).toEqual([
+      ['noise', 'Style preference'],
+      ['real', 'A fix landed.'],
+    ])
   })
 
   it('maps a rejected key to exit 4, logs the failure, and never prints or writes the key', async () => {
