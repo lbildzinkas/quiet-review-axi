@@ -98,6 +98,59 @@ describe('cut-offs in score output', () => {
     expect(result.jev.calls).toEqual([])
   })
 
+  it('names each file when cut-offs from different sources combine out of order', async () => {
+    const sandbox = createSandbox()
+    const repoPath = sandbox.write(
+      'work/.quiet-review.json',
+      JSON.stringify({ cutoffs: { collapse_below: 0.8 } }),
+    )
+    const userPath = sandbox.write(
+      'config/quiet-review-axi/config.json',
+      JSON.stringify({ cutoffs: { keep_at: 0.6 } }),
+      0o600,
+    )
+
+    const result = await score([], sandbox)
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toContain(`collapse_below 0.8 (repo config ${repoPath})`)
+    expect(result.stdout).toContain(`keep_at 0.6 (user config ${userPath})`)
+    expect(result.jev.calls).toEqual([])
+  })
+
+  it('refuses a config file whose own cut-offs are out of order, even when a flag overrides one', async () => {
+    const sandbox = createSandbox()
+    const path = sandbox.write(
+      'work/.quiet-review.json',
+      JSON.stringify({ cutoffs: { collapse_below: 0.9, keep_at: 0.5 } }),
+    )
+
+    const result = await score(['--keep-at', '0.95'], sandbox)
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toContain('code: VALIDATION_ERROR')
+    expect(result.stdout).toContain(path)
+    expect(result.stdout).toContain('cutoffs.collapse_below 0.9 is above cutoffs.keep_at 0.5')
+    expect(result.jev.calls).toEqual([])
+  })
+
+  it('refuses a misspelled cut-off key in the user config, naming the file and the key', async () => {
+    const sandbox = createSandbox()
+    const path = sandbox.write(
+      'config/quiet-review-axi/config.json',
+      JSON.stringify({ cutoffs: { collapse_below: 0.2, keep: 0.8 } }),
+      0o600,
+    )
+
+    const result = await score([], sandbox)
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toContain('code: VALIDATION_ERROR')
+    expect(result.stdout).toContain(path)
+    expect(result.stdout).toContain('cutoffs.keep')
+    expect(result.jev.calls).toEqual([])
+  })
+
   it('rejects unknown flags', async () => {
     const result = await score(['--bogus'])
 
