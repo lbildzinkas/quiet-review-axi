@@ -38,15 +38,42 @@ export async function requireGitHubToken(
 
 const ReadOnlyOctokit = Octokit.plugin(throttling, retry)
 
+// Stands in for one of the throttling plugin's Bottleneck groups (its `throttle.search` and
+// `throttle.write` options), implementing only the `key().schedule()` call the plugin makes: runs jobs at once.
+const UNPACED_GROUP = {
+  key: () => ({
+    schedule: <T>(_options: unknown, job: (...args: unknown[]) => T, ...args: unknown[]) =>
+      Promise.resolve(job(...args)),
+  }),
+} as unknown as NonNullable<ThrottlingGroup>
+
+type ThrottlingGroup = NonNullable<
+  ConstructorParameters<typeof ReadOnlyOctokit>[0]
+>['throttle'] extends infer T
+  ? T extends { search?: infer G }
+    ? G
+    : never
+  : never
+
 export type GitHubClient = InstanceType<typeof ReadOnlyOctokit>
 
 // Octokit wrapped so it can only read (spec 8.1): any REST method other than GET, and any
 // GraphQL document containing a mutation, throws before a request is sent.
-export function createGitHubClient(options: { token: string; fetch: FetchLike }): GitHubClient {
+// With `callerPacesSearch`, the throttling plugin's 2 s search spacing is switched off because
+// the caller's fetch paces the search requests that reach the network (replay, spec 8.1).
+// The plugin's 1 s write spacing is always off: this client never writes, and GraphQL reads
+// are POSTs the plugin would otherwise count as writes.
+export function createGitHubClient(options: {
+  token: string
+  fetch: FetchLike
+  callerPacesSearch?: boolean
+}): GitHubClient {
   const octokit = new ReadOnlyOctokit({
     auth: options.token,
     request: { fetch: options.fetch },
     throttle: {
+      write: UNPACED_GROUP,
+      ...(options.callerPacesSearch ? { search: UNPACED_GROUP } : {}),
       onRateLimit: (retryAfter: number, _options: unknown, _octokit: unknown, retryCount: number) =>
         retryCount < 1 && retryAfter <= 60,
       onSecondaryRateLimit: (
