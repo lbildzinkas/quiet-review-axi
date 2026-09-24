@@ -1,6 +1,7 @@
 import { encode } from '@toon-format/toon'
 import { runAxiCli } from 'axi-sdk-js'
 import { HOME_HELP, homeView } from './commands/home.js'
+import { replayCommand } from './commands/replay.js'
 import { SCORE_HELP, scoreCommand } from './commands/score.js'
 import { updateCommand } from './commands/update.js'
 import type { AppContext } from './context.js'
@@ -50,6 +51,7 @@ export async function main(context: AppContext): Promise<number> {
         joinBlocks(encode(await homeView(ctx ?? context)), renderHelp(HOME_HELP)),
       commands: {
         score: (args, ctx) => scoreCommand(args, ctx ?? context),
+        replay: (args, ctx) => replayCommand(args, ctx ?? context),
         update: (args) => updateCommand(args),
       },
       getCommandHelp: (command) => (command === 'score' ? `${SCORE_HELP}\n` : null),
