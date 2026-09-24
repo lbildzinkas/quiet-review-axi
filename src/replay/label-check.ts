@@ -193,11 +193,7 @@ export function parseLabelAnswer(content: string): ParsedAnswer {
 // The span from each `{` to its matching `}`, with braces inside JSON strings ignored, in
 // answer order; a `{` that closes nothing yields no candidate.
 function* objectCandidates(content: string): Generator<string> {
-  for (
-    let start = content.indexOf('{');
-    start !== -1;
-    start = content.indexOf('{', start + 1)
-  ) {
+  for (let start = content.indexOf('{'); start !== -1; start = content.indexOf('{', start + 1)) {
     let depth = 0
     let quoted = false
     let escaped = false
