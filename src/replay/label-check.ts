@@ -77,10 +77,13 @@ const CHANGE_CONTEXT_LINES = 10
 const MAX_CHANGE_CHARACTERS = 4000
 const MAX_REPLY_CHARACTERS = 1000
 const MAX_REPLIES = 10
+const MAX_COMMIT_SUBJECTS = 10
+const MAX_FOLLOWUP_FIXES = 3
 
 // What the label model and the maintainer see for one item (spec 10.6): the comment and its
-// hunk at comment time, the file's later diff at the anchor, and the thread. It carries no
-// label and no author login.
+// hunk at comment time, the file's later diff at the anchor, the pull request's title and
+// description, the later commits and any follow-up fix, and the thread. It carries no label
+// and no author login: who resolved is a role, not a name (label-rules-v2, D8).
 export function evidenceView(item: DrawnItem) {
   const { evidence } = item
   return {
@@ -89,12 +92,32 @@ export function evidenceView(item: DrawnItem) {
     comment: cleanBody(item.comment.body),
     code: item.comment.diff_hunk,
     changes_after_comment: changesNearAnchor(item),
+    pr_title: item.title,
+    pr_description: cleanBody(item.description),
+    later_commit_subjects: (evidence.commits_after ?? [])
+      .slice(0, MAX_COMMIT_SUBJECTS)
+      .map((commit) => commit.subject),
+    followup_fixes: (evidence.followups ?? []).slice(0, MAX_FOLLOWUP_FIXES).map((commit) => ({
+      sha: commit.sha.slice(0, 7),
+      subject: commit.subject,
+    })),
     resolved: evidence.resolved,
+    resolved_by: resolvedByRole(item),
     replies: evidence.replies.slice(0, MAX_REPLIES).map((reply) => ({
       from: reply.is_bot ? 'bot' : 'person',
       text: reply.body.slice(0, MAX_REPLY_CHARACTERS),
     })),
   }
+}
+
+// Who resolved the thread, as a role (never a login, D8): the bot that wrote the comment,
+// another bot, or a person.
+function resolvedByRole(item: DrawnItem): string | null {
+  if (!item.evidence.resolved) return null
+  const resolver = item.evidence.resolved_by ?? null
+  if (resolver === null) return 'a person'
+  if (resolver === item.bot) return 'the review bot'
+  return resolver.endsWith('[bot]') ? 'another bot' : 'a person'
 }
 
 // The hunks of the file's diff from `from` to `to` that touch the commented lines, widened

@@ -72,7 +72,12 @@ describe('pi invocation (spec 10.6 step 2)', () => {
       'comment',
       'code',
       'changes_after_comment',
+      'pr_title',
+      'pr_description',
+      'later_commit_subjects',
+      'followup_fixes',
       'resolved',
+      'resolved_by',
       'replies',
     ])
     expect(call?.stdin).not.toContain('automatic')
@@ -94,7 +99,7 @@ describe('pi invocation (spec 10.6 step 2)', () => {
 
 function callLog(sandbox: { env: { XDG_STATE_HOME: string } }) {
   return readJsonl(join(sandbox.env.XDG_STATE_HOME, 'quiet-review-axi', 'calls.jsonl')).filter(
-    (line) => line.prompt === 'label-check-v1',
+    (line) => line.prompt === 'label-check-v2',
   )
 }
 
@@ -110,7 +115,7 @@ describe('pi calls: log, cost and cache (spec 9.2, 9.3)', () => {
       command: 'replay',
       provider: 'pi',
       model: PI_MODEL,
-      prompt: 'label-check-v1',
+      prompt: 'label-check-v2',
       snapshot: 'glm-5.3-20260901',
       input_tokens: 1000,
       output_tokens: 40,

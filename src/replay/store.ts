@@ -15,6 +15,9 @@ export interface StageRecord {
   input_hash: string
   detail: string
   completed_at: string
+  // The labelling-rules version the label stage applied (spec 10.5); absent in records
+  // written before label-rules-v2, which is label-rules-v1.
+  label_rules?: string
   // A stage that ran but waits on something outside the tool, such as the maintainer's
   // review of the label check's disagreements. Absent means done.
   status?: 'waiting'

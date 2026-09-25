@@ -32,6 +32,17 @@ export interface FakePull {
   comments: FakeComment[]
   // Resolution state of each review thread, keyed by its root comment id.
   resolved?: Record<number, boolean>
+  // Who resolved each review thread (GraphQL `resolvedBy`), keyed by root comment id.
+  resolved_by?: Record<number, string>
+  // The pull request's body, base branch and merge commit.
+  body?: string | null
+  base?: string
+  merge_commit_sha?: string | null
+  // The pull request's commits, in order (sha and subject).
+  commits?: { sha: string; subject: string }[]
+  // Commits on the base branch after the merge that touch a file: sha, subject, commit
+  // date, the file's path and its patch in that commit.
+  followUps?: { sha: string; subject: string; at: string; path: string; patch?: string }[]
 }
 
 export interface FakeCompareFile {
@@ -89,20 +100,37 @@ export function createFakeGitHubReplay(
     const repository = world.repositories.find((repo) => repo.full_name === fullName)
     if (!repository) return notFound()
     if (rest === '') return jsonResponse(200, repositoryJson(repository))
-    const pullMatch = rest.match(/^\/pulls\/(\d+)(\/comments)?$/)
+    const pullMatch = rest.match(/^\/pulls\/(\d+)(\/comments|\/commits)?$/)
     if (pullMatch) {
       const pull = world.pulls.find(
         (candidate) =>
           candidate.repository === fullName && candidate.number === Number(pullMatch[1]),
       )
       if (!pull) return notFound()
-      if (pullMatch[2]) return page(parsed, pull.comments.map(commentJson(pull)))
+      if (pullMatch[2] === '/comments') return page(parsed, pull.comments.map(commentJson(pull)))
+      if (pullMatch[2] === '/commits')
+        return page(
+          parsed,
+          (pull.commits ?? []).map((commit) => ({
+            sha: commit.sha,
+            commit: { message: commit.subject },
+          })),
+        )
       return jsonResponse(200, pullJson(pull))
     }
+    const commitListMatch = rest.match(/^\/commits$/)
+    if (commitListMatch) return commitList(parsed, fullName)
+    const commitMatch = rest.match(/^\/commits\/([0-9a-f]+)$/)
+    if (commitMatch) return commitDetail(fullName, commitMatch[1] ?? '')
     const compareMatch = rest.match(/^\/compare\/(.+)$/)
     if (compareMatch) {
       const compare = world.compares?.[`${fullName}:${compareMatch[1]}`]
-      if (!compare) return notFound()
+      if (!compare) {
+        // A comparison of a commit with itself is empty, not missing.
+        const [base, head] = (compareMatch[1] ?? '').split('...')
+        if (base === head) return jsonResponse(200, { merge_base_commit: { sha: base }, files: [] })
+        return notFound()
+      }
       const [from] = (compareMatch[1] ?? '').split('...')
       return jsonResponse(200, {
         merge_base_commit: { sha: compare.merge_base ?? from },
@@ -179,6 +207,7 @@ export function createFakeGitHubReplay(
       .filter((comment) => comment.in_reply_to_id === undefined)
       .map((comment) => ({
         isResolved: pull.resolved?.[comment.id] ?? false,
+        resolvedBy: { login: pull.resolved_by?.[comment.id] ?? null },
         comments: { nodes: [{ databaseId: comment.id }] },
       }))
     return jsonResponse(200, {
@@ -189,6 +218,49 @@ export function createFakeGitHubReplay(
           },
         },
       },
+    })
+  }
+
+  // The base-branch commit list (`sha`, `path`, `since`, `until`), serving the world's
+  // follow-up commits whose date falls in the window.
+  function commitList(url: URL, repository: string) {
+    const path = url.searchParams.get('path') ?? undefined
+    const since = url.searchParams.get('since')
+    const until = url.searchParams.get('until')
+    const all = world.pulls
+      .filter((pull) => pull.repository === repository)
+      .flatMap((pull) => pull.followUps ?? [])
+    const seen = new Set<string>()
+    const hits = all
+      .filter((commit) => !seen.has(commit.sha) && seen.add(commit.sha))
+      .filter((commit) => path === undefined || commit.path === path)
+      .filter((commit) => since === null || since === undefined || commit.at >= since)
+      .filter((commit) => until === null || until === undefined || commit.at <= until)
+      .map((commit) => ({
+        sha: commit.sha,
+        commit: { message: commit.subject, committer: { date: commit.at } },
+      }))
+    return jsonResponse(200, hits)
+  }
+
+  function commitDetail(repository: string, sha: string) {
+    const commit = world.pulls
+      .filter((pull) => pull.repository === repository)
+      .flatMap((pull) => pull.followUps ?? [])
+      .find((candidate) => candidate.sha === sha)
+    if (!commit) return notFound()
+    return jsonResponse(200, {
+      sha: commit.sha,
+      commit: { message: commit.subject, committer: { date: commit.at } },
+      files: [
+        {
+          filename: commit.path,
+          status: 'modified',
+          additions: 1,
+          deletions: 1,
+          ...(commit.patch === undefined ? {} : { patch: commit.patch }),
+        },
+      ],
     })
   }
 
@@ -225,6 +297,9 @@ function pullJson(pull: FakePull) {
     title: pull.title,
     state: 'closed',
     merged_at: pull.merged_at,
+    body: pull.body ?? null,
+    base: { ref: pull.base ?? 'main' },
+    merge_commit_sha: pull.merge_commit_sha ?? null,
     head: { sha: pull.head_sha },
     html_url: `https://github.com/${pull.repository}/pull/${pull.number}`,
   }
