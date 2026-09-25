@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { QUESTION_PACK_VERSION } from '../src/core/questions.js'
+import { CONTEXT_PACK, QUESTION_PACK_VERSION } from '../src/core/questions.js'
 
 // Structure only: the pack's wording is judged by the replay, never by unit tests.
 const pack = JSON.parse(
@@ -61,5 +61,32 @@ describe('question pack', () => {
       for (const placeholder of placeholders)
         expect(Object.keys(pack.placeholders)).toContain(placeholder)
     }
+  })
+})
+
+describe('context question pack', () => {
+  const contextPack = JSON.parse(
+    readFileSync(new URL('../src/core/question-pack-context.json', import.meta.url), 'utf8'),
+  )
+
+  it('is versioned apart from the built-in pack, and loads', () => {
+    expect(contextPack.version).not.toBe(pack.version)
+    expect(CONTEXT_PACK.version).toBe(contextPack.version)
+  })
+
+  it("keeps the built-in pack's category, severity and duplicate questions", () => {
+    for (const name of ['cat', 'sev', 'dup'])
+      expect(contextPack.questions[name], name).toEqual(pack.questions[name])
+  })
+
+  it('points the worth-acting-on question at every context block by a bare state path', () => {
+    expect(contextPack.questions.act.instructions).toMatchObject({
+      review_comment: '`comments.{item}.comment`',
+      code_under_review: '`comments.{item}.code`',
+      rest_of_hunk: '`comments.{item}.hunk_rest`',
+      surrounding_code: '`comments.{item}.file`',
+      pull_request_description: '`pr.description`',
+      linked_issue: '`pr.linked_issue`',
+    })
   })
 })
