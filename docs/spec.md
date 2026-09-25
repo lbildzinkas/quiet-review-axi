@@ -934,6 +934,8 @@ A JSON file committed at `replay/<name>.config.json`:
 
 The window is the 3 months before the dataset build date (R9). It includes `merged_after` and excludes `merged_before` (UTC days). Bot logins in `bots` are examples; `build` verifies each login against real comments before drawing.
 
+Note: the first live replay, `public-v1`, used a 5-day window instead (PRs merged 2026-09-19 to 2026-09-23). It starts the day after Jev 1.13's release, so Jev could not have seen the comments. The window rule will be revisited with the next replay.
+
 `label_check.backend` is `openrouter` (the default when absent) or `pi` (10.6). With `pi`, `model` is a Pi model pattern (`provider/id`), `thinking` is required and is one of Pi's levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); `thinking` is refused for OpenRouter. A config without `backend` hashes as before. The label check on the z.ai GLM subscription at maximum reasoning is:
 
 ```json
