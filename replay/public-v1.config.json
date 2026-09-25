@@ -1,0 +1,27 @@
+{
+  "name": "public-v1",
+  "window": { "merged_after": "2026-09-19", "merged_before": "2026-09-24" },
+  "repositories": [
+    "BerriAI/litellm",
+    "elsa-workflows/elsa-core",
+    "jdx/mise",
+    "macro-inc/macro",
+    "pnpm/pnpm",
+    "ray-project/ray",
+    "ubugeeei-prod/vize",
+    "vllm-project/vllm-ascend"
+  ],
+  "bots": ["coderabbitai[bot]", "cursor[bot]", "gemini-code-assist[bot]", "greptile-apps[bot]"],
+  "target_items": 300,
+  "max_share_per_repository": 0.25,
+  "max_share_per_bot": 0.25,
+  "max_items_per_pr": 8,
+  "seed": 20260924,
+  "label_check": {
+    "sample_size": 60,
+    "backend": "pi",
+    "model": "zai-coding-cn/glm-5.3",
+    "thinking": "max"
+  },
+  "pass_rule": { "min_auroc": 0.75, "min_noise_collapsed": 0.4, "max_real_hidden": 0.05 }
+}

@@ -13,6 +13,7 @@ Output is compact [AXI](https://github.com/kunchenguid/axi) TOON for coding agen
 v0 is decided by an accuracy replay on public pull requests: it checks whether Jev's scores separate comments developers acted on from comments they ignored.
 The project continues only if the replay passes a rule fixed in advance (AUROC ≥ 0.75, and collapsing at least 40% of noise while hiding at most 5% of real issues).
 Until then, the verdict cut-offs are the generic 0.30 / 0.70 band, labelled `uncalibrated` in every output.
+The first live replay, [`public-v1`](replay/public-v1.result.md) (2026-09-24), was inconclusive: its automatic labels failed the label check's trust gate, so the pass rule was not judged and the go/no-go decision is still open.
 
 | Command | State |
 |---|---|
@@ -110,7 +111,7 @@ The `repo_config` and `user_config` lines give the path of each file, or `none (
 Every `score` output prints the same `cutoffs` line, so each result records the cut-offs it used.
 
 ```
-cutoffs: "collapse<0.27 keep>=0.70 (user config, calibrated on typesafe/jev-1.13-20260917 by replay public-v1)"
+cutoffs: "collapse<0.27 keep>=0.70 (user config, calibrated on typesafe/jev-1.13-20260917 by replay public-v2)"
 repo_config: none (/path/to/project/.quiet-review.json)
 user_config: /home/you/.config/quiet-review-axi/config.json
 ```
@@ -134,7 +135,7 @@ The write keeps every other field in the file, leaves the file readable only by 
   "cutoffs": {
     "collapse_below": 0.27,
     "keep_at": 0.7,
-    "replay": "public-v1",
+    "replay": "public-v2",
     "snapshot": "typesafe/jev-1.13-20260917",
     "tested_collapse_below": 0.27,
     "written_at": "2026-10-01"
