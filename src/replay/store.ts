@@ -75,6 +75,15 @@ export function replayFiles(dir: string) {
   }
 }
 
+// The context ablation's outputs, apart from the replay's own stages and result: each
+// variant's scores (no comment text) and the comparison.
+export function ablationFiles(dir: string) {
+  return {
+    result: join(dir, 'ablation', 'result.json'),
+    scores: (variant: string) => join(dir, 'ablation', 'scores', `${variant}.jsonl`),
+  }
+}
+
 export async function readManifest(dir: string, name: string): Promise<Manifest> {
   const text = await readOptional(replayFiles(dir).manifest)
   if (text === null) return { replay: name, config_hash: null, stages: {} }

@@ -1,14 +1,20 @@
-import { evaluateJudgments, type Evaluation, type LabelledJudgment } from '../calibration/index.js'
+import {
+  compareAuroc,
+  evaluateJudgments,
+  type Evaluation,
+  type LabelledJudgment,
+  type Range,
+} from '../calibration/index.js'
 import { BUILT_IN_CUTOFFS } from '../core/cutoffs.js'
 import type { QuestionPack } from '../core/questions.js'
 import { createJevJudge, type JevJudgeOptions, type JudgeItem } from '../jev/judge.js'
 import type { DrawnItem } from './build.js'
 import type { ReplayConfig } from './config.js'
-import { BOOTSTRAP_RESAMPLES } from './evaluate.js'
+import { BOOTSTRAP_RESAMPLES, type Interval } from './evaluate.js'
 import type { FinalLabel } from './final-labels.js'
 import type { ScoreRow } from './score.js'
 import { toJudgeItems } from './score.js'
-import type { ReplayContext } from './context.js'
+import type { BlockCoverage, ReplayContext } from './context.js'
 import type { ContextBlock } from './variants.js'
 
 // One variant of the context ablation: the question pack and the context blocks it scores with.
@@ -151,4 +157,129 @@ export function evaluateVariant(judgments: LabelledJudgment[], config: ReplayCon
     seed: config.seed,
     resamples: BOOTSTRAP_RESAMPLES,
   })
+}
+
+// One variant's line of the comparison: accuracy with its 95% ranges, the change against the
+// baseline on the same items (paired range), and token cost. Aggregates only, no comment text.
+export interface VariantResult {
+  variant: string
+  question_pack: string
+  blocks: ContextBlock[]
+  items: number
+  auroc: number | null
+  auroc_ci95: Interval | null
+  auroc_change: number | null
+  auroc_change_ci95: Interval | null
+  best_threshold: number | null
+  noise_collapsed: number | null
+  noise_collapsed_ci95: Interval | null
+  real_hidden: number | null
+  real_hidden_ci95: Interval | null
+  keep_precision: number | null
+  keep_precision_ci95: Interval | null
+  calls: number
+  input_tokens: number
+  tokens_per_item: number
+  cost_usd: number
+  snapshots: string[]
+}
+
+export interface AblationResult {
+  replay: string
+  evaluated_at: string
+  provider: string
+  variants_file: string
+  items: number
+  real: number
+  noise: number
+  // The replay's label-check trust verdict, null without a check stage: an inconclusive one
+  // means the labels every variant is measured on are not trusted.
+  trust: string | null
+  context: BlockCoverage[]
+  variants: VariantResult[]
+  // AUROC per bot and variant.
+  by_bot: { bot: string; items: number; real: number; auroc: Record<string, number | null> }[]
+  bootstrap: { resamples: number; seed: number }
+  cost_usd: number
+}
+
+// The comparison of the scored variants; the first is the baseline.
+export function compareVariants(input: {
+  replay: string
+  config: ReplayConfig
+  outcomes: VariantOutcome[]
+  provider: string
+  variantsFile: string
+  trust: string | null
+  context: BlockCoverage[]
+  costUsd: number
+  evaluatedAt: string
+}): AblationResult {
+  const { config, outcomes } = input
+  const evaluated = outcomes.map((outcome) => ({
+    outcome,
+    evaluation: evaluateVariant(outcome.judgments, config),
+  }))
+  const [baseline] = evaluated
+  const bootstrap = { resamples: BOOTSTRAP_RESAMPLES, seed: config.seed }
+  const variants = evaluated.map(({ outcome, evaluation }): VariantResult => {
+    const { threshold } = evaluation
+    const items = outcome.judgments.length
+    const comparison = baseline
+      ? compareAuroc(baseline.outcome.judgments, outcome.judgments, bootstrap)
+      : null
+    return {
+      variant: outcome.variant.name,
+      question_pack: outcome.variant.pack.version,
+      blocks: outcome.variant.blocks,
+      items,
+      auroc: evaluation.auroc,
+      auroc_ci95: interval(evaluation.ranges.auroc),
+      auroc_change: comparison?.change ?? null,
+      auroc_change_ci95: interval(comparison?.range ?? null),
+      best_threshold: threshold?.threshold ?? null,
+      noise_collapsed: threshold?.negativesBelow ?? null,
+      noise_collapsed_ci95: interval(evaluation.ranges.negativesBelow),
+      real_hidden: threshold?.positivesBelow ?? null,
+      real_hidden_ci95: interval(evaluation.ranges.positivesBelow),
+      keep_precision: evaluation.acceptPrecision,
+      keep_precision_ci95: interval(evaluation.ranges.acceptPrecision),
+      calls: outcome.calls,
+      input_tokens: outcome.inputTokens,
+      tokens_per_item: items === 0 ? 0 : Math.round(outcome.inputTokens / items),
+      cost_usd: outcome.costUsd,
+      snapshots: outcome.snapshots,
+    }
+  })
+  const bots = baseline?.evaluation.groups.bot ?? []
+  const counts = baseline?.evaluation.counts
+  return {
+    replay: input.replay,
+    evaluated_at: input.evaluatedAt,
+    provider: input.provider,
+    variants_file: input.variantsFile,
+    items: counts?.items ?? 0,
+    real: counts?.positives ?? 0,
+    noise: counts?.negatives ?? 0,
+    trust: input.trust,
+    context: input.context,
+    variants,
+    by_bot: bots.map((row) => ({
+      bot: row.value,
+      items: row.items,
+      real: row.positives,
+      auroc: Object.fromEntries(
+        evaluated.map(({ outcome, evaluation }) => [
+          outcome.variant.name,
+          evaluation.groups.bot?.find((group) => group.value === row.value)?.auroc ?? null,
+        ]),
+      ),
+    })),
+    bootstrap,
+    cost_usd: input.costUsd,
+  }
+}
+
+function interval(range: Range | null): Interval | null {
+  return range === null ? null : [range.low, range.high]
 }

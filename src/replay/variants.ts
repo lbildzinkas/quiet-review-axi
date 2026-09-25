@@ -12,6 +12,9 @@ export type ContextBlock = (typeof CONTEXT_BLOCKS)[number]
 // The baseline is always scored and needs no entry: the replay's own requests.
 export const BASELINE = 'baseline'
 
+// Names the comparison's per-bot table already uses for its own columns.
+const RESERVED_NAMES = [BASELINE, 'bot', 'items', 'real']
+
 const variantsSchema = z
   .object({
     variants: z
@@ -21,7 +24,10 @@ const variantsSchema = z
             name: z
               .string()
               .regex(/^[\w.-]+$/, 'must be letters, digits, dots, dashes or underscores')
-              .refine((name) => name !== BASELINE, `must not be ${BASELINE}, which is implicit`),
+              .refine(
+                (name) => !RESERVED_NAMES.includes(name),
+                `must not be ${RESERVED_NAMES.join(', ')} (the baseline is implicit)`,
+              ),
             blocks: z
               .array(z.enum(CONTEXT_BLOCKS))
               .refine((blocks) => new Set(blocks).size === blocks.length, 'must not repeat'),

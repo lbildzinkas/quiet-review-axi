@@ -345,3 +345,139 @@ describe('request size with every block', () => {
     expect(run.stdout).toContain('  all,v0.1-context.1,pr_description+linked_issue+wider_code,80,')
   }, 60_000)
 })
+
+describe('ablation budget', () => {
+  it('shares one --max-cost across every variant, stops cleanly, and resumes paying only for the rest', async () => {
+    const { sandbox, gitHub } = await evaluatedReplay()
+    writeVariants(sandbox, {
+      variants: [
+        { name: 'first', blocks: [] },
+        { name: 'second', blocks: ['pr_description'] },
+      ],
+    })
+    const jev = jevByPart(WORTH)
+
+    const stopped = await ablate(['public-v1', '--max-cost', '0.0005'], sandbox, jev, gitHub)
+
+    expect(stopped.exitCode).toBe(3)
+    expect(stopped.stdout).toContain('stopped: max-cost\n')
+    expect(stopped.stdout).toContain('code: BUDGET_STOP\n')
+    expect(stopped.stdout).toContain('stopped_in: "second: 3 of 10 items scored"\n')
+    expect(stopped.stdout).toContain(
+      'Run `quiet-review-axi ablate public-v1 --max-cost 0.5` to resume',
+    )
+    const paid = jev.calls.length
+    expect(paid).toBeGreaterThan(0)
+    expect(paid).toBeLessThan(20)
+
+    const resumed = await ablate(['public-v1', '--max-cost', '0.01'], sandbox, jev, gitHub)
+
+    expect(resumed.exitCode).toBe(0)
+    expect(jev.calls).toHaveLength(20)
+    expect(resumed.stdout).toMatch(/\n {2}second,v0\.1-context\.1,pr_description,10,/)
+  })
+})
+
+describe('ablation results', () => {
+  it("writes each variant's scores and the comparison, logs the run, and compares AUROC per bot", async () => {
+    const { sandbox } = await evaluatedReplay()
+    writeVariants(sandbox, { variants: [{ name: 'wording', blocks: [] }] })
+    const jev = jevByPart({ ...WORTH, 3: 0.38 })
+
+    const run = await ablate(['public-v1'], sandbox, jev)
+
+    expect(run.stdout).toContain(
+      'variants[2]{variant,question_pack,blocks,items,auroc,auroc_ci95,auroc_change,auroc_change_ci95,',
+    )
+    expect(run.stdout).toContain(
+      'by_bot[1]{bot,items,real,baseline,wording}:\n  "coderabbitai[bot]",10,5,0.96,0.92\n',
+    )
+    const result = JSON.parse(replayFile(sandbox, 'ablation/result.json')) as {
+      variants: { variant: string; auroc_change: number; auroc_change_ci95: [number, number] }[]
+    }
+    expect(result.variants.map((variant) => variant.variant)).toEqual(['baseline', 'wording'])
+    expect(result.variants[1]?.auroc_change).toBeCloseTo(-0.04, 10)
+    expect(result.variants[1]?.auroc_change_ci95[1]).toBeLessThanOrEqual(0)
+    expect(replayFile(sandbox, 'ablation/result.json')).not.toContain('Comment on part')
+    expect(replayFile(sandbox, 'ablation/scores/wording.jsonl').trim().split('\n')).toHaveLength(10)
+    const runs = replayFile(sandbox, 'runs.jsonl').trim().split('\n')
+    expect(JSON.parse(runs.at(-1) ?? '{}')).toMatchObject({
+      kind: 'ablation',
+      replay: 'public-v1',
+      variants: ['baseline', 'wording'],
+    })
+  })
+
+  it('prints the same comparison as one JSON document with --json', async () => {
+    const { sandbox } = await evaluatedReplay()
+    writeVariants(sandbox, { variants: [{ name: 'wording', blocks: [] }] })
+
+    const run = await ablate(['public-v1', '--json'], sandbox, jevByPart(WORTH))
+
+    const json = JSON.parse(run.stdout) as { ablation: string; variants: { variant: string }[] }
+    expect(json.ablation).toBe('public-v1')
+    expect(json.variants.map((variant) => variant.variant)).toEqual(['baseline', 'wording'])
+  })
+})
+
+describe('ablation refusals', () => {
+  it('refuses a replay that has not been labelled', async () => {
+    const { sandbox } = setupReplay()
+    writeVariants(sandbox, { variants: [{ name: 'pr', blocks: ['pr_description'] }] })
+
+    const run = await ablate(['public-v1'], sandbox, jevByPart(WORTH))
+
+    expect(run.exitCode).toBe(2)
+    expect(run.stdout).toContain('Replay public-v1 has not been labelled yet')
+  })
+
+  it.each([
+    [{ variants: [] }, 'variants'],
+    [{ variants: [{ name: 'x', blocks: ['diff'] }] }, 'variants.0.blocks.0'],
+    [{ variants: [{ name: 'baseline', blocks: [] }] }, 'variants.0.name'],
+    [{ variants: [{ name: 'real', blocks: [] }] }, 'variants.0.name'],
+    [
+      {
+        variants: [
+          { name: 'x', blocks: [] },
+          { name: 'x', blocks: ['wider_code'] },
+        ],
+      },
+      'must not repeat a variant name',
+    ],
+    [{ variants: [{ name: 'x', blocks: [], pack: 'v0.1' }] }, 'variants.0'],
+  ])('refuses an invalid variants file (%j)', async (variants, message) => {
+    const { sandbox } = await evaluatedReplay()
+    writeVariants(sandbox, variants)
+    const jev = jevByPart(WORTH)
+
+    const run = await ablate(['public-v1'], sandbox, jev)
+
+    expect(run.exitCode).toBe(2)
+    expect(run.stdout).toContain('Invalid variants file replay/public-v1.variants.json')
+    expect(run.stdout).toContain(message)
+    expect(jev.calls).toHaveLength(0)
+  })
+
+  it('refuses a missing variants file, naming where it goes', async () => {
+    const { sandbox } = await evaluatedReplay()
+
+    const run = await ablate(['public-v1'], sandbox, jevByPart(WORTH))
+
+    expect(run.exitCode).toBe(2)
+    expect(run.stdout).toContain('No variants file at replay/public-v1.variants.json')
+  })
+
+  it('refuses a replay config changed after build', async () => {
+    const { sandbox } = await evaluatedReplay()
+    writeVariants(sandbox, { variants: [{ name: 'wording', blocks: [] }] })
+    const path = join(sandbox.cwd, 'replay', 'public-v1.config.json')
+    const config = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    sandbox.write('work/replay/public-v1.config.json', JSON.stringify({ ...config, seed: 1 }))
+
+    const run = await ablate(['public-v1'], sandbox, jevByPart(WORTH))
+
+    expect(run.exitCode).toBe(2)
+    expect(run.stdout).toContain('changed after build')
+  })
+})
