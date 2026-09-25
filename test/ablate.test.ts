@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { combineHandlers, runCli, type Sandbox } from './helpers/run-cli.js'
 import type { RepositorySpec } from './fixtures/github/replay-world.js'
+import type { FakeIssue, FakePull } from './helpers/fake-github-replay.js'
 import {
   JEV_KEY,
   runReplay,
@@ -143,5 +144,93 @@ describe('context ablation', () => {
       })
       expect(request.questions.c1_act?.instructions).not.toHaveProperty('pull_request_description')
     })
+  })
+})
+
+describe('linked issue block', () => {
+  const ISSUE: Omit<FakeIssue, 'repository'> = {
+    number: 70,
+    title: 'Widget sends give up too early',
+    body: 'Sends fail on the first timeout.',
+    created_at: '2026-06-01T00:00:00Z',
+  }
+
+  async function linkedReplay(
+    pull: (pr: number) => Partial<FakePull>,
+    issues: Omit<FakeIssue, 'repository'>[] = [ISSUE],
+  ) {
+    const setup = await evaluatedReplay(contextReplay({ pull, issues }))
+    writeVariants(setup.sandbox, { variants: [{ name: 'issue', blocks: ['linked_issue'] }] })
+    const jev = jevByPart(WORTH)
+    const run = await ablate(['public-v1'], setup.sandbox, jev, setup.gitHub)
+    return { run, jev }
+  }
+
+  it('adds the issue a closing keyword named, as it read when the comment was written', async () => {
+    const { run, jev } = await linkedReplay(
+      (pr) => (pr === 1 ? { body: 'Retry sends.\n\nFixes #70' } : {}),
+      [
+        {
+          ...ISSUE,
+          title: 'Sends give up',
+          renames: [
+            {
+              at: '2026-07-30T00:00:00Z',
+              from: 'Widget sends give up too early',
+              to: 'Sends give up',
+            },
+          ],
+          body_history: [
+            { at: '2026-06-01T00:00:00Z', body: 'Sends fail on the first timeout.' },
+            { at: '2026-07-30T00:00:00Z', body: 'Fixed by the retry PR.' },
+          ],
+        },
+      ],
+    )
+
+    expect(run.exitCode).toBe(0)
+    const request = requestFor(jev, 1)
+    expect(request.state.pr.linked_issue).toEqual({
+      title: 'Widget sends give up too early',
+      body: 'Sends fail on the first timeout.',
+    })
+    // The linked-issue block alone does not show the description it was found in.
+    expect(request.state.pr).not.toHaveProperty('description')
+    expect(request.questions.c1_act?.instructions.linked_issue).toBe('`pr.linked_issue`')
+    expect(requestFor(jev, 2).state.pr).not.toHaveProperty('linked_issue')
+    expect(requestFor(jev, 2).questions.c1_act?.instructions).not.toHaveProperty('linked_issue')
+    expect(run.stdout).toContain('  linked_issue,1 of 10 pull requests,')
+  })
+
+  it('adds an issue linked in the sidebar before the comment, not one linked after it', async () => {
+    const { jev } = await linkedReplay((pr) => {
+      if (pr === 1) return { connected: [{ at: '2026-07-01T00:00:00Z', issue: 70 }] }
+      if (pr === 2) return { connected: [{ at: '2026-07-20T00:00:00Z', issue: 70 }] }
+      return {}
+    })
+
+    expect(requestFor(jev, 1).state.pr.linked_issue).toEqual({
+      title: 'Widget sends give up too early',
+      body: 'Sends fail on the first timeout.',
+    })
+    expect(requestFor(jev, 2).state.pr).not.toHaveProperty('linked_issue')
+  })
+
+  it('ignores a closing keyword added after the comment, or naming a pull request or a missing issue', async () => {
+    const { jev } = await linkedReplay((pr) => {
+      if (pr === 1)
+        return {
+          body_history: [
+            { at: '2026-07-01T00:00:00Z', body: 'Retry sends.' },
+            { at: '2026-07-20T00:00:00Z', body: 'Retry sends.\n\nCloses #70' },
+          ],
+        }
+      if (pr === 2) return { body: 'Follow-up. Fixes #3' }
+      if (pr === 3) return { body: 'Fixes #999' }
+      return {}
+    })
+
+    for (const part of [1, 2, 3])
+      expect(requestFor(jev, part).state.pr).not.toHaveProperty('linked_issue')
   })
 })

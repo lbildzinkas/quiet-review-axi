@@ -19,7 +19,8 @@ import {
 } from '../replay/ablation.js'
 import type { DrawnItem } from '../replay/build.js'
 import { defaultConfigPath, loadReplayConfig } from '../replay/config.js'
-import { gatherContext } from '../replay/context.js'
+import { blockCoverage, gatherContext } from '../replay/context.js'
+import { CONTEXT_BLOCKS } from '../replay/variants.js'
 import { createReplayFetch } from '../replay/fetch.js'
 import { readFinalLabels } from '../replay/final-labels.js'
 import { fromJsonl, readManifest, readOptional, replayDir, replayFiles } from '../replay/store.js'
@@ -149,12 +150,19 @@ export async function ablateCommand(args: string[], context: AppContext): Promis
     items: labelled.length,
     real: labelled.filter((entry) => entry.positive).length,
     noise: labelled.filter((entry) => !entry.positive).length,
+  }
+  if (blocks.size > 0)
+    view.context = blockCoverage(
+      replayContext,
+      CONTEXT_BLOCKS.filter((block) => blocks.has(block)),
+    )
+  Object.assign(view, {
     variants: evaluated.map(({ outcome, evaluation }) =>
       variantRow(outcome, evaluation, baseline?.evaluation ?? null),
     ),
     note: NOTE,
     cost_usd: roundCost(spent),
-  }
+  })
   const help = [`Run \`quiet-review-axi ablate ${name} --json\` for every variant's full metrics`]
   return render(view, help, asJson)
 }

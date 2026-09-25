@@ -294,11 +294,21 @@ export function createFakeGitHubReplay(
     const isPull = world.pulls.some(
       (pull) => pull.repository === `${owner}/${repo}` && pull.number === number,
     )
+    if (isPull)
+      return jsonResponse(200, {
+        data: { repository: { issueOrPullRequest: { __typename: 'PullRequest' } } },
+      })
+    // GitHub answers a missing number with a null field and a NOT_FOUND error.
     if (!issue)
       return jsonResponse(200, {
-        data: {
-          repository: { issueOrPullRequest: isPull ? { __typename: 'PullRequest' } : null },
-        },
+        data: { repository: { issueOrPullRequest: null } },
+        errors: [
+          {
+            type: 'NOT_FOUND',
+            path: ['repository', 'issueOrPullRequest'],
+            message: `Could not resolve to an issue or pull request with the number of ${String(number)}.`,
+          },
+        ],
       })
     const renames = (issue.renames ?? []).map((rename) => ({
       __typename: 'RenamedTitleEvent',
@@ -313,6 +323,7 @@ export function createFakeGitHubReplay(
             __typename: 'Issue',
             title: issue.title,
             body: currentBody(issue),
+            createdAt: issue.created_at ?? '2026-01-01T00:00:00Z',
             userContentEdits: edits(issue.body_history),
             timelineItems: { totalCount: renames.length, nodes: renames },
           },

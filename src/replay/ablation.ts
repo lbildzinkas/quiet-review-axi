@@ -73,6 +73,8 @@ export function withBlocks(
       if (pull.title !== null) header.title = pull.title
       if (pull.description !== null) header.description = pull.description
     }
+    if (blocks.includes('linked_issue') && pull?.linked_issue)
+      header.linkedIssue = pull.linked_issue
     return { ...entry, item: { ...item, header } }
   })
 }
