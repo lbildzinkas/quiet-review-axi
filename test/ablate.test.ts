@@ -5,6 +5,7 @@ import { combineHandlers, runCli, type Sandbox } from './helpers/run-cli.js'
 import type { RepositorySpec } from './fixtures/github/replay-world.js'
 import type { FakeIssue, FakePull } from './helpers/fake-github-replay.js'
 import {
+  createFakeJev,
   JEV_KEY,
   runReplay,
   setupReplay,
@@ -304,4 +305,43 @@ describe('wider code block', () => {
     expect(file).toContain(`\n10| ${long(10)}\n`)
     expect(file.split('\n').length).toBeGreaterThan(40)
   })
+})
+
+describe('request size with every block', () => {
+  it('keeps every request within the request budget when every block is at its limit', async () => {
+    const huge = (label: string) => `${label} ${'word '.repeat(1500)}`
+    const setup = contextReplay({
+      perPr: 8,
+      body: ({ pr, index }) => `${huge(`Comment ${index} on part`)} ${pr}`,
+      pull: () => ({ body: `${huge('Description')}\n\nFixes #70` }),
+      issues: [{ number: 70, title: 'Widget sends', body: huge('Issue') }],
+      contents: Object.fromEntries(
+        Array.from({ length: 8 }, (_, index) => [
+          `src/coderabbitaibot-1-${index}.ts@f-acme-widgets-1`,
+          Array.from({ length: 400 }, (_, line) => `${line} ${'y'.repeat(120)}`).join('\n'),
+        ]),
+      ),
+    })
+    await evaluatedReplay(setup)
+    writeVariants(setup.sandbox, {
+      variants: [{ name: 'all', blocks: ['pr_description', 'linked_issue', 'wider_code'] }],
+    })
+    const jev = createFakeJev()
+
+    const run = await ablate(['public-v1'], setup.sandbox, jev, setup.gitHub)
+
+    expect(run.exitCode).toBe(0)
+    for (const call of jev.calls)
+      expect(Math.ceil(call.body.length / 3.5)).toBeLessThanOrEqual(26_000)
+    const state = jev.calls[0]?.json.state as {
+      pr: { description: string; linked_issue: { title: string; body: string } }
+    }
+    expect(state.pr.description.length).toBeLessThanOrEqual(5250)
+    expect(
+      state.pr.linked_issue.title.length + state.pr.linked_issue.body.length,
+    ).toBeLessThanOrEqual(5250)
+    // Eight comments with every block do not fit one request: their PR is split by file.
+    expect(jev.calls.length).toBeGreaterThan(10)
+    expect(run.stdout).toContain('  all,v0.1-context.1,pr_description+linked_issue+wider_code,80,')
+  }, 60_000)
 })
