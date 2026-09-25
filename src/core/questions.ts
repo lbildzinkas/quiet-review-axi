@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { validationError } from '../errors.js'
 import builtInPack from './question-pack.json' with { type: 'json' }
+import contextPack from './question-pack-context.json' with { type: 'json' }
 
 // The Jev question wording lives only in question packs (spec 5.4.5): the built-in
 // question-pack.json, or a candidate pack file checked by the regression gate. Code fills the
@@ -45,6 +46,11 @@ export type QuestionPack = z.infer<typeof questionPackSchema>
 
 export const BUILT_IN_PACK: QuestionPack = questionPackSchema.parse(builtInPack)
 export const QUESTION_PACK_VERSION: string = BUILT_IN_PACK.version
+
+// The pack the context ablation scores its variants with: the worth-acting-on question also
+// points at the context blocks a variant adds to the state. `score` and the replay's own
+// stages never use it.
+export const CONTEXT_PACK: QuestionPack = questionPackSchema.parse(contextPack)
 
 // Validates a candidate pack file's structure. Its wording is judged by the replay gate.
 export function parseQuestionPack(raw: unknown, source: string): QuestionPack {
