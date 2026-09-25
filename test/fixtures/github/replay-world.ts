@@ -52,6 +52,9 @@ export interface RepositorySpec {
   prBody?: (pr: number) => string | null
   // Field overrides for a pull request, for example its body's edit history.
   pull?: (pr: number) => Partial<FakePull>
+  // Extra comparisons, keyed `from...to`, and file contents, keyed `path@ref`.
+  compares?: Record<string, FakeCompareFile[]>
+  contents?: Record<string, string>
   // Issues in the repository, which pull requests can link.
   issues?: Omit<FakeIssue, 'repository'>[]
   body?: (comment: CommentContext) => string
@@ -92,6 +95,8 @@ export function buildWorld(specs: RepositorySpec[]): FakeReplayWorld {
   specs.forEach((spec, repositoryIndex) => {
     world.repositories.push({ full_name: spec.name, ...spec.repository })
     for (const issue of spec.issues ?? []) world.issues.push({ repository: spec.name, ...issue })
+    for (const [range, files] of Object.entries(spec.compares ?? {}))
+      world.compares[`${spec.name}:${range}`] = { files }
     const slug = spec.name.replace('/', '-')
     const merged = spec.merged ?? 30
     const lastPr = Math.max(merged, ...Object.values(spec.bots))
@@ -175,6 +180,8 @@ export function buildWorld(specs: RepositorySpec[]): FakeReplayWorld {
       world.pulls.push({ ...pull, ...spec.pull?.(pr) })
       world.compares[`${spec.name}:${from}...${to}`] = { files }
     }
+    for (const [key, text] of Object.entries(spec.contents ?? {}))
+      world.contents[`${spec.name}:${key}`] = text
   })
   return world
 }

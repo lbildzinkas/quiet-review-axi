@@ -78,7 +78,7 @@ export async function ablateCommand(args: string[], context: AppContext): Promis
   const blocks = new Set(variants.flatMap((variant) => variant.blocks))
   const replayContext =
     blocks.size === 0
-      ? { pulls: new Map() }
+      ? { pulls: new Map(), items: new Map() }
       : await gatherContext({
           client: await replayClient(context, dir),
           items: drawn.filter((item) => labelled.some((entry) => entry.item.id === item.id)),

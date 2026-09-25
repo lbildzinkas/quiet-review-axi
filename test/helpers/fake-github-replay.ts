@@ -37,6 +37,7 @@ export interface FakePull {
   // The pull request's body, base branch and merge commit.
   body?: string | null
   base?: string
+  base_sha?: string
   merge_commit_sha?: string | null
   // When the pull request was opened, and its body's revisions in time order (the last is
   // the current body); without them the body was never edited.
@@ -422,7 +423,7 @@ function pullJson(pull: FakePull) {
     state: 'closed',
     merged_at: pull.merged_at,
     body: pull.body ?? null,
-    base: { ref: pull.base ?? 'main' },
+    base: { ref: pull.base ?? 'main', sha: pull.base_sha ?? `base-${pull.number}` },
     merge_commit_sha: pull.merge_commit_sha ?? null,
     head: { sha: pull.head_sha },
     html_url: `https://github.com/${pull.repository}/pull/${pull.number}`,

@@ -1,6 +1,7 @@
 import { cleanBody } from '../core/items.js'
 import { gitHubError, type GitHubClient } from '../inputs/github.js'
 import type { DrawnItem } from './build.js'
+import { baseSha, fetchCompareFiles, fetchFileText, type CompareFile } from './github.js'
 import type { ContextBlock } from './variants.js'
 
 // The context blocks of the context ablation, read from GitHub through the replay's cached,
@@ -13,7 +14,15 @@ import type { ContextBlock } from './variants.js'
 export const BLOCK_TOKEN_BUDGETS = {
   pr_description: 1500,
   linked_issue: 1500,
+  // The wider code block: the file window, and the rest of the diff hunk.
+  file_window: 1500,
+  hunk_rest: 500,
 } as const
+
+// How far the file window reaches on each side of the commented lines, and how much of one
+// line it shows (minified code can put a whole file on one line).
+const WINDOW_LINES_EACH_SIDE = 60
+const MAX_LINE_CHARACTERS = 400
 
 const CHARACTERS_PER_TOKEN = 3.5
 
@@ -34,9 +43,19 @@ export interface PullContext {
   linked_issue_reason?: string
 }
 
+// One comment's wider code, at the comment's commit.
+export interface ItemContext {
+  file: string | null
+  file_reason?: string
+  hunk_rest: string | null
+  hunk_rest_reason?: string
+}
+
 export interface ReplayContext {
   // Keyed by `owner/repo#number`, the batch key of the score stage.
   pulls: Map<string, PullContext>
+  // Keyed by item id.
+  items: Map<string, ItemContext>
 }
 
 export interface BlockCoverage {
@@ -51,18 +70,33 @@ export function blockCoverage(
   context: ReplayContext,
   blocks: readonly ContextBlock[],
 ): BlockCoverage[] {
+  const pulls = [...context.pulls.values()]
+  const items = [...context.items.values()]
   return blocks.map((block) => {
-    const pulls = [...context.pulls.values()]
+    if (block === 'wider_code') {
+      const files = items.filter((item) => item.file !== null).length
+      const hunks = items.filter((item) => item.hunk_rest !== null).length
+      const missing = [
+        ...tally(items.flatMap((item) => (item.file === null ? [item.file_reason] : []))),
+        ...tally(
+          items.flatMap((item) => (item.hunk_rest === null ? [item.hunk_rest_reason] : [])),
+        ).map((reason) => `rest of hunk: ${reason}`),
+      ]
+      return {
+        block,
+        shown: `${files} of ${items.length} comments (rest of hunk on ${hunks})`,
+        missing: missing.length === 0 ? 'none' : missing.join('; '),
+      }
+    }
     const reasons =
       block === 'pr_description'
         ? pulls.map((pull) => (pull.description === null ? pull.description_reason : null))
         : pulls.map((pull) => (pull.linked_issue === null ? pull.linked_issue_reason : null))
     const missing = tally(reasons.filter((reason) => reason !== null))
-    const shown = reasons.filter((reason) => reason === null).length
     return {
       block,
-      shown: `${shown} of ${pulls.length} pull requests`,
-      missing: missing.length === 0 ? 'none' : missing.join(', '),
+      shown: `${reasons.filter((reason) => reason === null).length} of ${pulls.length} pull requests`,
+      missing: missing.length === 0 ? 'none' : missing.join('; '),
     }
   })
 }
@@ -85,15 +119,21 @@ export async function gatherContext(input: {
   progress?: (line: string) => void
 }): Promise<ReplayContext> {
   const pulls = new Map<string, PullContext>()
-  if (!input.blocks.has('pr_description') && !input.blocks.has('linked_issue')) return { pulls }
+  const items = new Map<string, ItemContext>()
+  const needsPull = input.blocks.has('pr_description') || input.blocks.has('linked_issue')
+  const needsCode = input.blocks.has('wider_code')
   for (const [batch, members] of byPull(input.items)) {
     const [first] = members
-    if (!first) continue
+    if (!first || (!needsPull && !needsCode)) continue
     input.progress?.(`ablate: reading the context of ${batch}`)
-    const at = members.map((item) => item.comment.created_at).sort()[0] ?? ''
-    pulls.set(batch, await pullContextAt(input.client, first, at))
+    if (needsPull) {
+      const at = members.map((item) => item.comment.created_at).sort()[0] ?? ''
+      pulls.set(batch, await pullContextAt(input.client, first, at))
+    }
+    if (needsCode)
+      for (const [id, code] of await widerCode(input.client, members)) items.set(id, code)
   }
-  return { pulls }
+  return { pulls, items }
 }
 
 function byPull(items: DrawnItem[]): [string, DrawnItem[]][] {
@@ -345,6 +385,113 @@ async function issueAt(
 
 function cut(text: string, tokens: number): string {
   return text.slice(0, characters(tokens)).trimEnd()
+}
+
+// The wider code of a pull request's comments: each comment's file at the comment's commit,
+// windowed around the commented lines, and the rest of its diff hunk from the pull request's
+// diff at that commit.
+async function widerCode(
+  client: GitHubClient,
+  members: DrawnItem[],
+): Promise<Map<string, ItemContext>> {
+  const [first] = members
+  const code = new Map<string, ItemContext>()
+  if (!first) return code
+  const base = await baseSha(client, first.repository, first.pr)
+  const patches = new Map<string, CompareFile[] | null>()
+  for (const item of [...members].sort((a, b) => compareText(a.id, b.id))) {
+    const from = item.evidence.from
+    const anchor = item.evidence.anchor
+    const file =
+      anchor === null
+        ? { file: null, file_reason: 'comment on the old side' }
+        : fileWindow(await fetchFileText(client, item.repository, item.comment.path, from), anchor)
+    if (base !== null && !patches.has(from))
+      patches.set(from, await fetchCompareFiles(client, item.repository, base, from))
+    const files = base === null ? null : (patches.get(from) ?? null)
+    code.set(item.id, { ...file, ...hunkRest(files, item.comment.path, item.comment.diff_hunk) })
+  }
+  return code
+}
+
+// The numbered lines around the commented ones, widening one line at a time on each side
+// while the window fits its budget.
+function fileWindow(
+  text: string | null,
+  anchor: { start: number; end: number },
+): Pick<ItemContext, 'file' | 'file_reason'> {
+  if (text === null) return { file: null, file_reason: 'file unavailable' }
+  const lines = text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n')
+  const end = Math.min(anchor.end, lines.length)
+  if (end < 1 || anchor.start > lines.length)
+    return { file: null, file_reason: 'anchor outside file' }
+  const numbered = (line: number) => {
+    const content = lines[line - 1] ?? ''
+    const shown =
+      content.length > MAX_LINE_CHARACTERS ? `${content.slice(0, MAX_LINE_CHARACTERS)}…` : content
+    return `${line}| ${shown}`.trimEnd()
+  }
+  const budget = characters(BLOCK_TOKEN_BUDGETS.file_window)
+  const size = (window: string[]) => window.join('\n').length
+  // The commented line is the last of the anchor; a long anchor keeps its end.
+  let window: string[] = []
+  for (let line = end; line >= Math.max(1, anchor.start); line--) {
+    const next = [numbered(line), ...window]
+    if (size(next) > budget) break
+    window = next
+  }
+  let low = end - window.length + 1
+  let high = end
+  let canGrowUp = true
+  let canGrowDown = true
+  for (let step = 1; step <= WINDOW_LINES_EACH_SIDE; step++) {
+    if (canGrowUp && low > 1 && size([numbered(low - 1), ...window]) <= budget) {
+      window = [numbered(low - 1), ...window]
+      low--
+    } else canGrowUp = false
+    if (canGrowDown && high < lines.length && size([...window, numbered(high + 1)]) <= budget) {
+      window = [...window, numbered(high + 1)]
+      high++
+    } else canGrowDown = false
+  }
+  return { file: window.join('\n') }
+}
+
+// The lines of the comment's hunk after the commented line, found by the hunk's header in the
+// pull request's diff at the comment's commit.
+function hunkRest(
+  files: CompareFile[] | null,
+  path: string,
+  diffHunk: string,
+): Pick<ItemContext, 'hunk_rest' | 'hunk_rest_reason'> {
+  const patch = files?.find((file) => file.filename === path)?.patch
+  if (patch === undefined) return { hunk_rest: null, hunk_rest_reason: 'diff unavailable' }
+  const [header, ...shown] = diffHunk.replace(/\r\n?/g, '\n').split('\n')
+  const hunk = patchHunks(patch).find((candidate) => candidate[0] === header)
+  const body = hunk?.slice(1) ?? []
+  const isPrefix = shown.every((line, index) => body[index] === line)
+  if (!hunk || !isPrefix) return { hunk_rest: null, hunk_rest_reason: 'hunk not found' }
+  const rest = body.slice(shown.length)
+  if (rest.length === 0) return { hunk_rest: null, hunk_rest_reason: 'comment at the hunk end' }
+  const budget = characters(BLOCK_TOKEN_BUDGETS.hunk_rest)
+  const kept: string[] = []
+  for (const line of rest) {
+    if ([...kept, line].join('\n').length > budget) break
+    kept.push(line)
+  }
+  return kept.length === 0
+    ? { hunk_rest: null, hunk_rest_reason: 'hunk line too long' }
+    : { hunk_rest: kept.join('\n') }
+}
+
+// A patch's hunks, each starting with its `@@` header line.
+function patchHunks(patch: string): string[][] {
+  const hunks: string[][] = []
+  for (const line of patch.replace(/\r\n?/g, '\n').split('\n')) {
+    if (line.startsWith('@@')) hunks.push([line])
+    else hunks.at(-1)?.push(line)
+  }
+  return hunks
 }
 
 // A title as it read at a time: the previous title of the first rename after it, or the

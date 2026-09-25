@@ -75,7 +75,19 @@ export function withBlocks(
     }
     if (blocks.includes('linked_issue') && pull?.linked_issue)
       header.linkedIssue = pull.linked_issue
-    return { ...entry, item: { ...item, header } }
+    const code = blocks.includes('wider_code') ? context.items.get(item.id) : undefined
+    return {
+      ...entry,
+      item: {
+        ...item,
+        header,
+        item: {
+          ...item.item,
+          ...(code?.file ? { file: code.file } : {}),
+          ...(code?.hunk_rest ? { hunkRest: code.hunk_rest } : {}),
+        },
+      },
+    }
   })
 }
 

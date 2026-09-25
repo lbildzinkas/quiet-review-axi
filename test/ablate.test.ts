@@ -234,3 +234,74 @@ describe('linked issue block', () => {
       expect(requestFor(jev, part).state.pr).not.toHaveProperty('linked_issue')
   })
 })
+
+describe('wider code block', () => {
+  // PR N's comment is on line 10 of src/coderabbitaibot-N-0.ts at commit f-acme-widgets-N;
+  // the replay world serves that file (100 lines, "line K") for odd PRs only.
+  const path = (pr: number) => `src/coderabbitaibot-${pr}-0.ts`
+
+  async function widerReplay(spec: Partial<RepositorySpec> = {}) {
+    const setup = contextReplay(spec)
+    await evaluatedReplay(setup)
+    writeVariants(setup.sandbox, { variants: [{ name: 'code', blocks: ['wider_code'] }] })
+    const jev = jevByPart(WORTH)
+    const run = await ablate(['public-v1'], setup.sandbox, jev, setup.gitHub)
+    return { run, jev, gitHub: setup.gitHub }
+  }
+
+  it("adds the numbered file around the comment at the comment's commit, and the rest of its hunk", async () => {
+    const { run, jev } = await widerReplay({
+      pull: (pr) => (pr === 1 ? { base_sha: 'b-acme-widgets-1' } : {}),
+      compares: {
+        'b-acme-widgets-1...f-acme-widgets-1': [
+          {
+            filename: path(1),
+            status: 'modified',
+            patch: [
+              '@@ -1,3 +1,10 @@',
+              '+const value = read()',
+              '+use(value)',
+              '+check(value)',
+              '-return null',
+              '+return value',
+            ].join('\n'),
+          },
+        ],
+      },
+    })
+
+    expect(run.exitCode).toBe(0)
+    const comment = requestFor(jev, 1).state.comments.c1
+    const lines = Array.from({ length: 70 }, (_, index) => `${index + 1}| line ${index + 1}`)
+    expect(comment?.file).toBe(lines.join('\n'))
+    expect(comment?.hunk_rest).toBe('+check(value)\n-return null\n+return value')
+    expect(requestFor(jev, 1).questions.c1_act?.instructions).toMatchObject({
+      surrounding_code: '`comments.c1.file`',
+      rest_of_hunk: '`comments.c1.hunk_rest`',
+    })
+    // PR 2's file cannot be read at its commit and its comparison is missing.
+    expect(requestFor(jev, 2).state.comments.c1).not.toHaveProperty('file')
+    expect(requestFor(jev, 2).questions.c1_act?.instructions).not.toHaveProperty('surrounding_code')
+    expect(requestFor(jev, 2).questions.c1_act?.instructions).not.toHaveProperty('rest_of_hunk')
+    expect(run.stdout).toContain(
+      '  wider_code,5 of 10 comments (rest of hunk on 1),"file unavailable 5; rest of hunk: diff unavailable 9"',
+    )
+  })
+
+  it('narrows the window around the commented line to stay within its budget', async () => {
+    const long = (line: number) => `line ${line} ${'x'.repeat(80)}`
+    const { jev } = await widerReplay({
+      contents: {
+        [`${path(1)}@f-acme-widgets-1`]: Array.from({ length: 400 }, (_, index) =>
+          long(index + 1),
+        ).join('\n'),
+      },
+    })
+
+    const file = String(requestFor(jev, 1).state.comments.c1?.file)
+    expect(file.length).toBeLessThanOrEqual(5250)
+    expect(file.split('\n')[0]).toBe(`1| ${long(1)}`)
+    expect(file).toContain(`\n10| ${long(10)}\n`)
+    expect(file.split('\n').length).toBeGreaterThan(40)
+  })
+})
