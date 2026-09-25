@@ -103,8 +103,8 @@ export async function runBuild(options: {
   progress(`build: drawing from ${candidates.length} eligible comments`)
 
   const compares = new Map<string, CompareResult | null>()
-  const threads = new Map<number, Awaited<ReturnType<typeof fetchReviewThreads>>>()
-  const commits = new Map<number, LaterCommit[]>()
+  const threads = new Map<string, Awaited<ReturnType<typeof fetchReviewThreads>>>()
+  const commits = new Map<string, LaterCommit[]>()
   const branchCommits = new Map<string, { sha: string; subject: string; date: string }[]>()
   const evidenceFor = async (candidate: EligibleComment): Promise<Evidence> => {
     const { comment, pull } = candidate
@@ -114,13 +114,14 @@ export async function runBuild(options: {
     if (!compares.has(compareKey))
       compares.set(compareKey, await fetchCompare(client, candidate.repository, from, to))
     const compare = compares.get(compareKey) ?? null
-    if (!threads.has(pull.number))
-      threads.set(pull.number, await fetchReviewThreads(client, pull.repository, pull.number))
-    if (!commits.has(pull.number))
-      commits.set(pull.number, await fetchPullCommits(client, pull.repository, pull.number))
+    const prKey = `${pull.repository}#${pull.number}`
+    if (!threads.has(prKey))
+      threads.set(prKey, await fetchReviewThreads(client, pull.repository, pull.number))
+    if (!commits.has(prKey))
+      commits.set(prKey, await fetchPullCommits(client, pull.repository, pull.number))
     // The commits after the comment's commit: a reply naming one of them agrees, and their
     // subjects are matched against the comment heading (label-rules-v2).
-    const pullCommits = commits.get(pull.number) ?? []
+    const pullCommits = commits.get(prKey) ?? []
     const fromIndex = pullCommits.findIndex((commit) => commit.sha === from)
     const commitsAfter = fromIndex === -1 ? [] : pullCommits.slice(fromIndex + 1)
     // A file renamed after the comment is listed under its new name.
@@ -131,7 +132,7 @@ export async function runBuild(options: {
     // Rule 2 needs the file's size at `from`; deleted and renamed files are excluded anyway.
     const needsLines =
       file !== null && file.status !== 'removed' && file.status !== 'renamed' && file.deletions > 0
-    const thread = threads.get(pull.number)?.get(comment.id)
+    const thread = threads.get(prKey)?.get(comment.id)
     const anchor = anchorOf(comment)
     return {
       from,
@@ -233,7 +234,7 @@ async function followUpFixes(
   if (Number.isNaN(merged)) return []
   const since = new Date(merged + FOLLOWUP_GRACE_MS).toISOString()
   const until = new Date(merged + FOLLOWUP_WINDOW_DAYS * DAY).toISOString()
-  const key = `${pull.baseRef}:${path}:${since}:${until}`
+  const key = `${repository}:${pull.baseRef}:${path}:${since}:${until}`
   if (!options.branchCommits.has(key))
     options.branchCommits.set(
       key,

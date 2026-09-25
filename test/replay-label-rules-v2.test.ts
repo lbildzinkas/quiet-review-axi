@@ -227,3 +227,87 @@ describe('comment eligibility under label-rules-v2 (spec 10.4)', () => {
     expect(result.stdout).toContain('build,done,"1 repos, 1 bots, 9 comments from 9 PRs"')
   })
 })
+
+// A replay spans several repositories (R9) whose pull request numbers overlap, so the
+// per-PR evidence read during `build` must not be shared across repositories.
+describe('per-PR evidence across repositories', () => {
+  it('reads each repository own thread resolution when PR numbers overlap', async () => {
+    const { sandbox, gitHub } = setupReplay({
+      config: {
+        target_items: 100,
+        bots: ['cursor[bot]'],
+        repositories: ['acme/widgets', 'beta/gadgets'],
+      },
+      specs: [
+        { name: 'acme/widgets', bots: { 'cursor[bot]': 10 }, changed: () => false },
+        {
+          name: 'beta/gadgets',
+          bots: { 'cursor[bot]': 10 },
+          changed: () => false,
+          resolved: ({ pr }) => pr <= 3,
+          resolvedBy: ({ pr }) => (pr <= 3 ? 'cursor[bot]' : undefined),
+        },
+      ],
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('label,done,"real 3, noise 17, excluded 0"')
+  })
+
+  it('reads each repository own commits when PR numbers overlap', async () => {
+    const { sandbox, gitHub } = setupReplay({
+      config: {
+        target_items: 100,
+        repositories: ['acme/widgets', 'beta/gadgets'],
+      },
+      specs: [
+        { name: 'acme/widgets', bots: { 'coderabbitai[bot]': 10 }, changed: () => false },
+        {
+          name: 'beta/gadgets',
+          bots: { 'coderabbitai[bot]': 10 },
+          changed: () => false,
+          resolved: () => true,
+          commits: (pr) => [
+            { sha: `f-beta-gadgets-${pr}`, subject: 'Start the change' },
+            { sha: sha(pr), subject: 'Guard the null dereference' },
+          ],
+          replies: ({ pr }) => [
+            {
+              login: 'claude[bot]',
+              type: 'Bot',
+              body: `Fixed in ${sha(pr)}: the dereference is guarded now.`,
+            },
+          ],
+        },
+      ],
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('label,done,"real 10, noise 10, excluded 0"')
+  })
+
+  it('reads each repository own base-branch follow-ups when PR numbers overlap', async () => {
+    const { sandbox, gitHub } = setupReplay({
+      config: {
+        target_items: 100,
+        repositories: ['acme/widgets', 'beta/gadgets'],
+      },
+      specs: [
+        { name: 'acme/widgets', bots: { 'coderabbitai[bot]': 10 }, changed: () => false },
+        {
+          name: 'beta/gadgets',
+          bots: { 'coderabbitai[bot]': 10 },
+          changed: () => false,
+          followUps: ({ pr }) =>
+            pr <= 3 ? [{ sha: sha(pr), subject: 'Fix the null dereference upstream' }] : [],
+        },
+      ],
+    })
+
+    const result = await runReplay(['public-v1'], sandbox, gitHub)
+
+    expect(result.stdout).toContain('label,done,"real 3, noise 17, excluded 0"')
+  })
+})
