@@ -1,9 +1,19 @@
 import type { Item } from './items.js'
-import { BUILT_IN_PACK, itemQuestions, type Question, type QuestionPack } from './questions.js'
+import {
+  BUILT_IN_PACK,
+  itemQuestions,
+  pruneAbsentReferences,
+  type Question,
+  type QuestionPack,
+} from './questions.js'
 
 export interface RequestHeader {
   repository?: string
   title?: string
+  // Context blocks (the replay's context ablation): the pull request's description and the
+  // issue it linked, as they read when its comments were written.
+  description?: string
+  linkedIssue?: { title: string; body: string }
 }
 
 export interface JevRequest {
@@ -95,16 +105,36 @@ function buildRequest(header: RequestHeader, items: Item[], pack: QuestionPack):
     }
   })
   const state: Record<string, unknown> = {}
-  if (header.repository !== undefined || header.title !== undefined) state.pr = prHeader(header)
+  const pr = prHeader(header)
+  if (Object.keys(pr).length > 0) state.pr = pr
   state.comments = comments
-  return { itemKeys: items.map((item) => item.key), state, questions }
+  // A question's reference to a context block the state lacks is left out.
+  const pruned = Object.fromEntries(
+    Object.entries(questions).map(([id, question]) => [
+      id,
+      pruneAbsentReferences(question, (path) => hasPath(state, path)),
+    ]),
+  )
+  return { itemKeys: items.map((item) => item.key), state, questions: pruned }
 }
 
 function prHeader(header: RequestHeader) {
-  const pr: Record<string, string> = {}
+  const pr: Record<string, unknown> = {}
   if (header.repository !== undefined) pr.repository = header.repository
   if (header.title !== undefined) pr.title = header.title
+  if (header.description !== undefined) pr.description = header.description
+  if (header.linkedIssue !== undefined) pr.linked_issue = header.linkedIssue
   return pr
+}
+
+// Whether a dotted path such as `comments.c1.file` names a value in the state.
+function hasPath(state: Record<string, unknown>, path: string): boolean {
+  let current: unknown = state
+  for (const segment of path.split('.')) {
+    if (current === null || typeof current !== 'object' || !(segment in current)) return false
+    current = (current as Record<string, unknown>)[segment]
+  }
+  return true
 }
 
 function stateEntry(item: Item) {
@@ -113,6 +143,8 @@ function stateEntry(item: Item) {
   if (item.lines !== null) entry.lines = item.lines
   entry.code = item.code
   entry.comment = item.body
+  if (item.file !== undefined) entry.file = item.file
+  if (item.hunkRest !== undefined) entry.hunk_rest = item.hunkRest
   return entry
 }
 

@@ -98,3 +98,23 @@ function fillPlaceholders(value: unknown, replacements: Record<string, string>):
     Object.entries(value).map(([key, entry]) => [key, fillPlaceholders(entry, replacements)]),
   )
 }
+
+// An instruction entry that is only a backticked state path points Jev at part of the state.
+// When that part is absent, for example a context block a pull request does not have, the
+// entry is left out, so a question never points at nothing.
+const REFERENCE = /^`([^`]+)`$/
+
+export function pruneAbsentReferences(
+  question: Question,
+  hasPath: (path: string) => boolean,
+): Question {
+  const { instructions } = question
+  if (instructions === null || typeof instructions !== 'object' || Array.isArray(instructions))
+    return question
+  const kept = Object.entries(instructions as Record<string, unknown>).filter(([, value]) => {
+    const match = typeof value === 'string' ? REFERENCE.exec(value) : null
+    return match === null || hasPath(match[1] ?? '')
+  })
+  if (kept.length === Object.keys(instructions).length) return question
+  return { ...question, instructions: Object.fromEntries(kept) }
+}

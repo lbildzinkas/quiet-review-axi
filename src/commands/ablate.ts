@@ -6,17 +6,21 @@ import type { AppContext } from '../context.js'
 import { BUILT_IN_PACK, CONTEXT_PACK } from '../core/questions.js'
 import { BudgetStop, validationError } from '../errors.js'
 import { loadUserConfig } from '../infra/config.js'
+import { createGitHubClient, requireGitHubToken } from '../inputs/github.js'
 import { PROVIDERS } from '../jev/providers.js'
 import { joinBlocks, renderHelp, resumeLimit, roundCost } from '../output/render.js'
 import {
   evaluateVariant,
   labelledJudgeItems,
   scoreVariant,
+  withBlocks,
   type AblationVariant,
   type VariantOutcome,
 } from '../replay/ablation.js'
 import type { DrawnItem } from '../replay/build.js'
 import { defaultConfigPath, loadReplayConfig } from '../replay/config.js'
+import { gatherContext } from '../replay/context.js'
+import { createReplayFetch } from '../replay/fetch.js'
 import { readFinalLabels } from '../replay/final-labels.js'
 import { fromJsonl, readManifest, readOptional, replayDir, replayFiles } from '../replay/store.js'
 import { BASELINE, defaultVariantsPath, loadVariants } from '../replay/variants.js'
@@ -68,7 +72,18 @@ export async function ablateCommand(args: string[], context: AppContext): Promis
     { name: BASELINE, pack: BUILT_IN_PACK, blocks: [] },
     ...declared.map((variant) => ({ ...variant, pack: CONTEXT_PACK })),
   ]
-  const labelled = labelledJudgeItems(fromJsonl<DrawnItem>(itemsText), labels.labels)
+  const drawn = fromJsonl<DrawnItem>(itemsText)
+  const labelled = labelledJudgeItems(drawn, labels.labels)
+  const blocks = new Set(variants.flatMap((variant) => variant.blocks))
+  const replayContext =
+    blocks.size === 0
+      ? { pulls: new Map() }
+      : await gatherContext({
+          client: await replayClient(context, dir),
+          items: drawn.filter((item) => labelled.some((entry) => entry.item.id === item.id)),
+          blocks,
+          progress: (line) => context.stderr.write(`${line}\n`),
+        })
 
   const userConfig = await loadUserConfig(context)
   const provider =
@@ -93,7 +108,11 @@ export async function ablateCommand(args: string[], context: AppContext): Promis
       // One --max-cost covers every variant of the ablation.
       flags: { maxCost: Math.max(0, maxCost - spent), noCache: values['no-cache'] ?? false },
     })
-    const outcome = await scoreVariant({ variant, labelled, judgeOptions })
+    const outcome = await scoreVariant({
+      variant,
+      labelled: withBlocks(labelled, variant.blocks, replayContext),
+      judgeOptions,
+    })
     spent += outcome.spentUsd
     outcomes.push(outcome)
     if (outcome.unscored > 0) break
@@ -138,6 +157,17 @@ export async function ablateCommand(args: string[], context: AppContext): Promis
   }
   const help = [`Run \`quiet-review-axi ablate ${name} --json\` for every variant's full metrics`]
   return render(view, help, asJson)
+}
+
+// The replay's read-only GitHub client, whose answers are cached in the replay directory, so a
+// re-run reads nothing from the network.
+async function replayClient(context: AppContext, dir: string) {
+  const token = await requireGitHubToken(context.env, context.runGhAuthToken)
+  return createGitHubClient({
+    token: token.token,
+    fetch: createReplayFetch({ ...context, cacheDir: replayFiles(dir).github }),
+    callerPacesSearch: true,
+  })
 }
 
 function variantRow(outcome: VariantOutcome, evaluation: Evaluation, baseline: Evaluation | null) {

@@ -38,6 +38,14 @@ export interface FakePull {
   body?: string | null
   base?: string
   merge_commit_sha?: string | null
+  // When the pull request was opened, and its body's revisions in time order (the last is
+  // the current body); without them the body was never edited.
+  created_at?: string
+  body_history?: { at: string; body: string }[]
+  // Title renames in time order (GraphQL RenamedTitleEvent).
+  renames?: { at: string; from: string; to: string }[]
+  // Issues linked in the sidebar (ConnectedEvent) or unlinked (DisconnectedEvent).
+  connected?: { at: string; issue: number; repository?: string; disconnected?: boolean }[]
   // The pull request's commits, in order (sha and subject).
   commits?: { sha: string; subject: string }[]
   // Commits on the base branch after the merge that touch a file: sha, subject, commit
@@ -54,9 +62,20 @@ export interface FakeCompareFile {
   previous_filename?: string
 }
 
+export interface FakeIssue {
+  repository: string
+  number: number
+  title: string
+  body: string | null
+  created_at?: string
+  body_history?: { at: string; body: string }[]
+  renames?: { at: string; from: string; to: string }[]
+}
+
 export interface FakeReplayWorld {
   repositories: FakeRepository[]
   pulls: FakePull[]
+  issues?: FakeIssue[]
   // Compare results keyed by `owner/repo:from...to`; missing entries answer 404.
   compares?: Record<string, { merge_base?: string; files: FakeCompareFile[] }>
   // File contents keyed by `owner/repo:path@ref`; a `{ tooLarge }` value answers the 403 the
@@ -197,7 +216,9 @@ export function createFakeGitHubReplay(
     )
   }
 
-  function graphql(request: { variables?: Record<string, unknown> }) {
+  function graphql(request: { query?: string; variables?: Record<string, unknown> }) {
+    if (request.query?.includes('issueOrPullRequest')) return issueContext(request.variables ?? {})
+    if (request.query?.includes('userContentEdits')) return pullContext(request.variables ?? {})
     const { owner, repo, number } = request.variables ?? {}
     const pull = world.pulls.find(
       (candidate) => candidate.repository === `${owner}/${repo}` && candidate.number === number,
@@ -215,6 +236,85 @@ export function createFakeGitHubReplay(
         repository: {
           pullRequest: {
             reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+          },
+        },
+      },
+    })
+  }
+
+  // The pull request's context at a point in time: its body and edit history, and its title
+  // renames and linked issues from the timeline.
+  function pullContext(variables: Record<string, unknown>) {
+    const { owner, repo, number } = variables
+    const pull = world.pulls.find(
+      (candidate) => candidate.repository === `${owner}/${repo}` && candidate.number === number,
+    )
+    if (!pull) return jsonResponse(200, { data: { repository: { pullRequest: null } } })
+    const subject = (link: { issue: number; repository?: string }) => {
+      const repository = link.repository ?? pull.repository
+      const isIssue = (world.issues ?? []).some(
+        (issue) => issue.repository === repository && issue.number === link.issue,
+      )
+      return isIssue
+        ? { __typename: 'Issue', number: link.issue, repository: { nameWithOwner: repository } }
+        : { __typename: 'PullRequest' }
+    }
+    const timeline = [
+      ...(pull.renames ?? []).map((rename) => ({
+        __typename: 'RenamedTitleEvent',
+        createdAt: rename.at,
+        previousTitle: rename.from,
+        currentTitle: rename.to,
+      })),
+      ...(pull.connected ?? []).map((link) => ({
+        __typename: link.disconnected ? 'DisconnectedEvent' : 'ConnectedEvent',
+        createdAt: link.at,
+        subject: subject(link),
+      })),
+    ].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    return jsonResponse(200, {
+      data: {
+        repository: {
+          pullRequest: {
+            title: pull.title,
+            body: currentBody(pull),
+            userContentEdits: edits(pull.body_history),
+            timelineItems: { totalCount: timeline.length, nodes: timeline },
+          },
+        },
+      },
+    })
+  }
+
+  function issueContext(variables: Record<string, unknown>) {
+    const { owner, repo, number } = variables
+    const issue = (world.issues ?? []).find(
+      (candidate) => candidate.repository === `${owner}/${repo}` && candidate.number === number,
+    )
+    const isPull = world.pulls.some(
+      (pull) => pull.repository === `${owner}/${repo}` && pull.number === number,
+    )
+    if (!issue)
+      return jsonResponse(200, {
+        data: {
+          repository: { issueOrPullRequest: isPull ? { __typename: 'PullRequest' } : null },
+        },
+      })
+    const renames = (issue.renames ?? []).map((rename) => ({
+      __typename: 'RenamedTitleEvent',
+      createdAt: rename.at,
+      previousTitle: rename.from,
+      currentTitle: rename.to,
+    }))
+    return jsonResponse(200, {
+      data: {
+        repository: {
+          issueOrPullRequest: {
+            __typename: 'Issue',
+            title: issue.title,
+            body: currentBody(issue),
+            userContentEdits: edits(issue.body_history),
+            timelineItems: { totalCount: renames.length, nodes: renames },
           },
         },
       },
@@ -277,6 +377,19 @@ export function createFakeGitHubReplay(
   }
 
   return { requests, matches, handle }
+}
+
+function currentBody(entry: { body?: string | null; body_history?: { body: string }[] }) {
+  return entry.body_history?.at(-1)?.body ?? entry.body ?? null
+}
+
+// GitHub lists a body's revisions newest first, each with its full text in `diff`; the oldest
+// is the original body. A body never edited has no revisions.
+function edits(history: { at: string; body: string }[] | undefined) {
+  const nodes = [...(history ?? [])]
+    .reverse()
+    .map((revision) => ({ editedAt: revision.at, diff: revision.body }))
+  return { totalCount: nodes.length, nodes }
 }
 
 function repositoryJson(repository: FakeRepository) {

@@ -10,6 +10,7 @@
       "instructions": {
         "review_comment": "`comments.{item}.comment`",
         "code_under_review": "`comments.{item}.code`",
+        "pull_request_description": "`pr.description`",
         "question": "Does `comments.{item}.comment` point out a concrete problem in `comments.{item}.code` that the author of the change should fix before merging, given what the pull request sets out to do and the code around the change?"
       },
       "criteria": {

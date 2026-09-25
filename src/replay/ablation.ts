@@ -8,6 +8,7 @@ import { BOOTSTRAP_RESAMPLES } from './evaluate.js'
 import type { FinalLabel } from './final-labels.js'
 import type { ScoreRow } from './score.js'
 import { toJudgeItems } from './score.js'
+import type { ReplayContext } from './context.js'
 import type { ContextBlock } from './variants.js'
 
 // One variant of the context ablation: the question pack and the context blocks it scores with.
@@ -54,6 +55,26 @@ export function labelledJudgeItems(items: DrawnItem[], labels: FinalLabel[]): La
     positive: labelOf.get(item.id) === 'real',
     groups: { bot: drawnOf.get(item.id)?.bot ?? '' },
   }))
+}
+
+// The labelled items with a variant's context blocks added to their requests. Without blocks
+// they are the score stage's items unchanged, so their requests are byte-identical.
+export function withBlocks(
+  labelled: LabelledJudgeItem[],
+  blocks: readonly ContextBlock[],
+  context: ReplayContext,
+): LabelledJudgeItem[] {
+  if (blocks.length === 0) return labelled
+  return labelled.map((entry) => {
+    const { item } = entry
+    const header = { ...item.header }
+    const pull = context.pulls.get(item.batch)
+    if (blocks.includes('pr_description') && pull) {
+      if (pull.title !== null) header.title = pull.title
+      if (pull.description !== null) header.description = pull.description
+    }
+    return { ...entry, item: { ...item, header } }
+  })
 }
 
 // Scores the labelled items under one variant, through the shared request builder, cache,
