@@ -60,6 +60,9 @@ export async function ablateCommand(args: string[], context: AppContext): Promis
   if (positionals.length > 1)
     throw validationError(`Unexpected arguments: ${positionals.slice(1).join(' ')}`)
   const name = positionals[0] ?? 'default'
+  const maxCost = parseNumber('--max-cost', values['max-cost']) ?? DEFAULT_MAX_COST
+  const providerFlag = parseProvider(values.provider)
+  const asJson = values.json ?? false
   const loaded = await loadReplayConfig(
     resolve(context.cwd, values.config ?? defaultConfigPath(context.cwd, name)),
     name,
@@ -92,12 +95,13 @@ export async function ablateCommand(args: string[], context: AppContext): Promis
   const drawn = fromJsonl<DrawnItem>(itemsText)
   const labelled = labelledJudgeItems(drawn, labels.labels)
   const blocks = new Set(variants.flatMap((variant) => variant.blocks))
+  const labelledIds = new Set(labelled.map((entry) => entry.item.id))
   const replayContext =
     blocks.size === 0
       ? { pulls: new Map(), items: new Map() }
       : await gatherContext({
           client: await replayClient(context, dir),
-          items: drawn.filter((item) => labelled.some((entry) => entry.item.id === item.id)),
+          items: drawn.filter((item) => labelledIds.has(item.id)),
           blocks,
           progress: (line) => context.stderr.write(`${line}\n`),
         })
@@ -105,13 +109,11 @@ export async function ablateCommand(args: string[], context: AppContext): Promis
   const userConfig = await loadUserConfig(context)
   const provider =
     PROVIDERS[
-      parseProvider(values.provider) ??
+      providerFlag ??
         providerName(manifest.stages.score?.provider) ??
         userConfig.provider ??
         'openrouter'
     ]
-  const maxCost = parseNumber('--max-cost', values['max-cost']) ?? DEFAULT_MAX_COST
-  const asJson = values.json ?? false
   let spent = 0
   const outcomes: VariantOutcome[] = []
   for (const variant of variants) {
