@@ -23,6 +23,7 @@ The first live replay, [`public-v1`](replay/public-v1.result.md) (2026-09-24), w
 | `quiet-review-axi report` | Available: prints the accuracy summary of an evaluated replay, with 95% ranges, and the same metrics on the label-check sample alone as a robustness check |
 | `quiet-review-axi gate` | Available: checks a reworded question pack against an evaluated replay before it is adopted |
 | `quiet-review-axi smoke` | Available: scores about 20 unmistakable comments by hand after a Jev model update |
+| `quiet-review-axi ablate` | Available: scores a labelled replay again with more context (the pull request's description, its linked issue, the code around the comment) and compares each variant with the replay's own scores |
 
 Backends: OpenRouter (default) or the TypeSafe API, with your own key.
 
@@ -160,6 +161,42 @@ Answers are cached, so a re-run after a failure asks only about the comments sti
 A subscription is meant for modest use: the check makes about 60 calls once per dataset.
 Check that your provider's terms allow this kind of scripted use before you pick it.
 Jev scoring always goes through OpenRouter or the TypeSafe API, never through a subscription.
+
+### Testing whether more context helps
+
+Jev normally sees only the review comment and the few lines of code it sits on.
+A reviewer judging the same comment would often look further: at what the pull request is for, at the issue it fixes, and at the rest of the file.
+`quiet-review-axi ablate <replay>` measures whether giving Jev that context makes its scores separate real comments from noise better.
+It reuses a replay that is already labelled, and never changes that replay's result or your cut-offs.
+
+List the variants to compare in `replay/<replay>.variants.json`, committed before you run it:
+
+```json
+{
+  "variants": [
+    { "name": "wording", "blocks": [] },
+    { "name": "pr", "blocks": ["pr_description"] },
+    { "name": "issue", "blocks": ["linked_issue"] },
+    { "name": "code", "blocks": ["wider_code"] },
+    { "name": "all", "blocks": ["pr_description", "linked_issue", "wider_code"] }
+  ]
+}
+```
+
+Each variant adds any of three context blocks:
+
+- `pr_description`: the pull request's title and description;
+- `linked_issue`: the title and body of the issue the pull request linked, when it linked one (the output says how often);
+- `wider_code`: the commented file around the comment, with line numbers, and the rest of the diff hunk after the commented line.
+
+Every block holds only what existed when the comment was written.
+A description edited later, an issue linked later, and the file after later commits are all left out, because replies, later commits and the merge are what the replay's labels come from.
+Each block is cut to a fixed size, so every request stays well inside Jev's context limit.
+The variants use a separate question pack whose worth-acting-on question points at the blocks; a variant with no block measures that rewording alone.
+
+The baseline is always included: the replay's own requests, served from the cache at no cost.
+For each variant the output shows the AUROC with its 95% range, the change against the baseline (with a range computed on the same comments, so it reflects the difference itself), how much noise it collapses while hiding at most 5% of real comments, the AUROC per bot, and the tokens and cost it takes.
+One `--max-cost` covers every variant; a stopped run resumes and pays only for what is missing.
 
 ### When to calibrate again
 
