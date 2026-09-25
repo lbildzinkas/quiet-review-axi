@@ -111,7 +111,7 @@ The `repo_config` and `user_config` lines give the path of each file, or `none (
 Every `score` output prints the same `cutoffs` line, so each result records the cut-offs it used.
 
 ```
-cutoffs: "collapse<0.27 keep>=0.70 (user config, calibrated on typesafe/jev-1.13-20260917 by replay public-v1)"
+cutoffs: "collapse<0.27 keep>=0.70 (user config, calibrated on typesafe/jev-1.13-20260917 by replay public-v2)"
 repo_config: none (/path/to/project/.quiet-review.json)
 user_config: /home/you/.config/quiet-review-axi/config.json
 ```
@@ -135,7 +135,7 @@ The write keeps every other field in the file, leaves the file readable only by 
   "cutoffs": {
     "collapse_below": 0.27,
     "keep_at": 0.7,
-    "replay": "public-v1",
+    "replay": "public-v2",
     "snapshot": "typesafe/jev-1.13-20260917",
     "tested_collapse_below": 0.27,
     "written_at": "2026-10-01"
