@@ -3,17 +3,20 @@ import type { ReplayConfig } from './config.js'
 import { isBot } from '../inputs/pull-request.js'
 import {
   countMergedPulls,
+  fetchBranchCommits,
+  fetchCommitFiles,
   fetchCompare,
   fetchRepositoryMeta,
   fetchFileLines,
-  fetchThreadResolution,
+  fetchPullCommits,
   fetchReplayPull,
+  fetchReviewThreads,
   searchMergedPulls,
   type CompareResult,
   type ReplayComment,
   type ReplayPull,
 } from './github.js'
-import { labelComment, type Evidence, type Reply } from './label.js'
+import { isChangedAt, labelComment, type Evidence, type LaterCommit, type Reply } from './label.js'
 import { drawSample, type Candidate } from './sample.js'
 import {
   botActivityRejection,
@@ -28,8 +31,10 @@ export interface DrawnItem {
   id: string
   repository: string
   pr: number
-  // The pull request's title, which goes into the Jev state as `score` sends it (spec 5.3).
+  // The pull request's title and description: the title goes into the Jev state as `score`
+  // sends it (spec 5.3), and both go to the label-check model (spec 10.6, label-rules-v2).
   title: string
+  description: string
   bot: string
   comment: {
     id: number
@@ -98,7 +103,9 @@ export async function runBuild(options: {
   progress(`build: drawing from ${candidates.length} eligible comments`)
 
   const compares = new Map<string, CompareResult | null>()
-  const threads = new Map<string, Map<number, boolean>>()
+  const threads = new Map<number, Awaited<ReturnType<typeof fetchReviewThreads>>>()
+  const commits = new Map<number, LaterCommit[]>()
+  const branchCommits = new Map<string, { sha: string; subject: string; date: string }[]>()
   const evidenceFor = async (candidate: EligibleComment): Promise<Evidence> => {
     const { comment, pull } = candidate
     const from = comment.original_commit_id
@@ -107,8 +114,15 @@ export async function runBuild(options: {
     if (!compares.has(compareKey))
       compares.set(compareKey, await fetchCompare(client, candidate.repository, from, to))
     const compare = compares.get(compareKey) ?? null
-    if (!threads.has(candidate.pr))
-      threads.set(candidate.pr, await fetchThreadResolution(client, pull.repository, pull.number))
+    if (!threads.has(pull.number))
+      threads.set(pull.number, await fetchReviewThreads(client, pull.repository, pull.number))
+    if (!commits.has(pull.number))
+      commits.set(pull.number, await fetchPullCommits(client, pull.repository, pull.number))
+    // The commits after the comment's commit: a reply naming one of them agrees, and their
+    // subjects are matched against the comment heading (label-rules-v2).
+    const pullCommits = commits.get(pull.number) ?? []
+    const fromIndex = pullCommits.findIndex((commit) => commit.sha === from)
+    const commitsAfter = fromIndex === -1 ? [] : pullCommits.slice(fromIndex + 1)
     // A file renamed after the comment is listed under its new name.
     const file =
       compare?.files.find(
@@ -117,10 +131,12 @@ export async function runBuild(options: {
     // Rule 2 needs the file's size at `from`; deleted and renamed files are excluded anyway.
     const needsLines =
       file !== null && file.status !== 'removed' && file.status !== 'renamed' && file.deletions > 0
+    const thread = threads.get(pull.number)?.get(comment.id)
+    const anchor = anchorOf(comment)
     return {
       from,
       to,
-      anchor: anchorOf(comment),
+      anchor,
       compare:
         compare === null
           ? null
@@ -128,7 +144,19 @@ export async function runBuild(options: {
       file_lines: needsLines
         ? await fetchFileLines(client, candidate.repository, comment.path, from)
         : null,
-      resolved: threads.get(candidate.pr)?.get(comment.id) ?? false,
+      resolved: thread?.resolved ?? false,
+      resolved_by: thread?.resolvedBy ?? null,
+      commits_after: commitsAfter,
+      followups:
+        anchor === null || pull.mergedAt === null
+          ? []
+          : await followUpFixes(client, candidate.repository, {
+              branchCommits,
+              pull,
+              pullCommits,
+              path: comment.path,
+              anchor,
+            }),
       replies: repliesTo(pull, comment.id),
     }
   }
@@ -144,7 +172,8 @@ export async function runBuild(options: {
     isExcluded: async (candidate) => {
       const found = await evidenceFor(candidate)
       evidence.set(candidate.key, found)
-      return labelComment(found).label === 'excluded'
+      const comment = { bot: candidate.bot, body: candidate.comment.body }
+      return labelComment(found, comment).label === 'excluded'
     },
   })
   const items = draws.map(({ candidate }): DrawnItem => {
@@ -156,6 +185,7 @@ export async function runBuild(options: {
       repository: candidate.repository,
       pr: candidate.pull.number,
       title: candidate.pull.title,
+      description: candidate.pull.body ?? '',
       bot: candidate.bot,
       comment: {
         id: comment.id,
@@ -174,6 +204,52 @@ export async function runBuild(options: {
 }
 
 type Qualification = { reason: string } | { pulls: ReplayPull[]; prsPerBot: Record<string, number> }
+
+// Follow-up fixes (label-rules-v2): commits on the base branch within about 7 days after
+// the merge that change the commented lines. The first hour after the merge is skipped, so
+// the merge itself (a squash commit, or a rebased commit carrying a new sha) is never read
+// as a follow-up; the PR's own commits are excluded explicitly as well. The anchor's line
+// numbers are those of the pull request's head, which the base branch shares right after
+// the merge; drift within the window is an accepted approximation.
+const FOLLOWUP_WINDOW_DAYS = 7
+const HOUR = 60 * 60 * 1000
+const DAY = 24 * HOUR
+// The first hour after the merge is skipped, so the merge itself is never read as a follow-up.
+const FOLLOWUP_GRACE_MS = HOUR
+
+async function followUpFixes(
+  client: GitHubClient,
+  repository: string,
+  options: {
+    branchCommits: Map<string, { sha: string; subject: string; date: string }[]>
+    pull: ReplayPull
+    pullCommits: LaterCommit[]
+    path: string
+    anchor: { start: number; end: number }
+  },
+): Promise<LaterCommit[]> {
+  const { pull, path, anchor } = options
+  const merged = Date.parse(pull.mergedAt ?? '')
+  if (Number.isNaN(merged)) return []
+  const since = new Date(merged + FOLLOWUP_GRACE_MS).toISOString()
+  const until = new Date(merged + FOLLOWUP_WINDOW_DAYS * DAY).toISOString()
+  const key = `${pull.baseRef}:${path}:${since}:${until}`
+  if (!options.branchCommits.has(key))
+    options.branchCommits.set(
+      key,
+      await fetchBranchCommits(client, repository, { ref: pull.baseRef, path, since, until }),
+    )
+  const own = new Set([...options.pullCommits.map((commit) => commit.sha), pull.mergeCommitSha])
+  const fixes: LaterCommit[] = []
+  for (const commit of options.branchCommits.get(key) ?? []) {
+    if (own.has(commit.sha)) continue
+    const files = await fetchCommitFiles(client, repository, commit.sha)
+    const file = files?.find((entry) => entry.filename === path || entry.previous_filename === path)
+    if (file?.patch !== undefined && isChangedAt(file.patch, anchor))
+      fixes.push({ sha: commit.sha, subject: commit.subject })
+  }
+  return fixes
+}
 
 // Applies the criteria of spec 10.3, cheapest reads first, and returns the repository's PRs
 // merged in the window that the listed bots commented on.
@@ -227,7 +303,9 @@ function coverageWarnings(summary: BuildSummary): string[] {
   return warnings
 }
 
-// Bot summaries and walkthroughs posted as inline comments, by their known markers.
+// Bot summaries and walkthroughs posted as inline comments, by their known markers, plus
+// comments about the pull request's title and description (Gemini's block), which review
+// the pull request's metadata rather than its code (label-rules-v2).
 const SUMMARY_MARKERS = [
   /<!--\s*walkthrough_start\s*-->/i,
   /<!--\s*This is an auto-generated comment: summarize by coderabbit\.ai\s*-->/i,
@@ -235,11 +313,21 @@ const SUMMARY_MARKERS = [
   /^#{1,3}\s*Pull Request Overview\b/im,
   /^#{1,3}\s*Greptile Summary\b/im,
   /<h3>\s*Greptile Summary\s*<\/h3>/i,
+  /\bPull Request Title and Summary\b/i,
+  /^\s*\*{0,2}Suggested PR (?:Title|Summary)\*{0,2}:\s*$/m,
 ]
 
+// GitHub titles a generated revert pull request `Revert "..."`; such a PR restores old
+// code instead of accepting review, so its comments are not eligible (label-rules-v2).
+function isRevertPull(title: string): boolean {
+  return /^revert\b/i.test(title)
+}
+
 // Eligibility (spec 10.4): a thread-root inline comment by a configured bot, on a PR merged
-// inside the window, with a diff hunk and a line anchor, that is not a bot summary.
+// inside the window, with a diff hunk and a line anchor, that is not a bot summary and not
+// on a pure revert PR.
 function eligibleComments(pull: ReplayPull, config: ReplayConfig): EligibleComment[] {
+  if (isRevertPull(pull.title)) return []
   return pull.comments
     .filter((comment) => comment.in_reply_to_id === undefined || comment.in_reply_to_id === null)
     .filter((comment) => config.bots.includes(comment.user?.login ?? ''))

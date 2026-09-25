@@ -28,7 +28,7 @@ import { runDiscovery, type Discovery, type DiscoveredRepository } from '../repl
 import { evaluateReplay, type ReplayResult } from '../replay/evaluate.js'
 import { createReplayFetch } from '../replay/fetch.js'
 import { readFinalLabels } from '../replay/final-labels.js'
-import { labelComment, type Label } from '../replay/label.js'
+import { labelComment, LABEL_RULES_VERSION, type Label } from '../replay/label.js'
 import { LABEL_PROMPT_VERSION } from '../replay/label-check.js'
 import type { LabelBackend } from '../replay/label-model.js'
 import { openRouterBackend } from '../replay/label-openrouter.js'
@@ -198,10 +198,14 @@ async function labelStage(run: ReplayRun): Promise<void> {
     throw validationError(`The build stage of replay ${run.name} has not run yet`, [
       `Run \`quiet-review-axi replay ${run.name} --stage build\` first`,
     ])
+  assertLabelRules(run)
   const inputHash = hashText(itemsText)
   if (run.manifest.stages.label?.input_hash === inputHash) return
   const labels = fromJsonl<DrawnItem>(itemsText).map((item) => {
-    const result = labelComment(item.evidence)
+    const result = labelComment(item.evidence, {
+      bot: item.bot,
+      body: item.comment.body,
+    })
     return { id: item.id, label: result.label, reason: result.reason, signals: result.signals }
   })
   await writeAtomic(files.labels, toJsonl(labels))
@@ -212,6 +216,7 @@ async function labelStage(run: ReplayRun): Promise<void> {
     if (reason !== null) excludedByReason[reason] = (excludedByReason[reason] ?? 0) + 1
   run.manifest.stages.label = {
     input_hash: inputHash,
+    label_rules: LABEL_RULES_VERSION,
     detail: `real ${counts.real}, noise ${counts.noise}, excluded ${counts.excluded}`,
     completed_at: run.context.now().toISOString(),
     counts,
@@ -353,6 +358,24 @@ async function evaluateStage(run: ReplayRun): Promise<void> {
   await writeManifest(run.dir, run.manifest)
 }
 
+// The labelling rules are pre-registered with a replay (spec 10.5): once a replay was
+// labelled under one version, another version never relabels it in place.
+const LABEL_RULES_V1 = 'label-rules-v1'
+
+function assertLabelRules(run: ReplayRun): void {
+  const previous = run.manifest.stages.label
+  if (previous === undefined) return
+  const recorded = previous.label_rules ?? LABEL_RULES_V1
+  if (recorded === LABEL_RULES_VERSION) return
+  throw validationError(
+    `Replay ${run.name} was labelled with ${recorded}; this build carries ${LABEL_RULES_VERSION}`,
+    [
+      'Run the old replay with the build it was labelled with, or copy the config into a config with a new replay name',
+      `Run \`quiet-review-axi replay <new-name>\` to label a fresh dataset with ${LABEL_RULES_VERSION}`,
+    ],
+  )
+}
+
 async function checkStage(run: ReplayRun): Promise<void> {
   const files = replayFiles(run.dir)
   const itemsText = await readOptional(files.items)
@@ -361,6 +384,7 @@ async function checkStage(run: ReplayRun): Promise<void> {
     throw validationError(`The label stage of replay ${run.name} has not run yet`, [
       `Run \`quiet-review-axi replay ${run.name}\` to build and label the dataset first`,
     ])
+  assertLabelRules(run)
   // The sample and the requests follow from the labels, the items and the prompt template.
   const inputHash = hashText(
     canonicalJson({

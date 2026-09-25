@@ -120,7 +120,7 @@ user_config: /home/you/.config/quiet-review-axi/config.json
 
 `quiet-review-axi replay <name>` measures how well Jev's scores separate useful review comments from noise, on public pull requests:
 
-1. `build` and `label` collect bot review comments and label each one `real` (mainly: the lines it pointed at changed before the pull request merged) or `noise` (they did not change). Comments with unclear evidence are excluded.
+1. `build` and `label` collect bot review comments and label each one `real` (the lines it pointed at changed before the pull request merged, a reply or the thread's resolver says it was fixed, a later commit's subject repeats the comment's heading, or a follow-up commit on the base branch fixed the lines) or `noise` (nothing changed, or the author or the reviewing bot dismissed it — which also overrides a coincidental edit at the anchor). Comments with unclear evidence, and comments on a pull request's final commit with no fix evidence anywhere, are excluded. The labelling rules are versioned; the first public replay ran `label-rules-v1`, and the current `label-rules-v2` also ignores comments on PR titles and pure revert PRs.
 2. `check` asks an AI model to label a random sample of the same comments, and you review the ones where it disagrees with the automatic label.
    If the AI agrees with fewer than 80% of the automatic labels, or your review overturns more than 20% of the ones you reviewed, the labels are not trusted and the replay's verdict is `inconclusive` instead of pass or fail.
 3. `score` asks Jev for each comment's `worth`.

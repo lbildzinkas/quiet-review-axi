@@ -38,7 +38,7 @@ describe('replay score stage', () => {
     })
     expect(Object.values(state.comments)).toEqual([
       {
-        path: 'src/coderabbitaibot-0.ts',
+        path: 'src/coderabbitaibot-3-0.ts',
         lines: '10',
         code: '@@ -1,3 +1,10 @@\n+const value = read()\n+use(value)',
         comment: expect.stringMatching(/^Possible null dereference of `value` \(#\d+\)\.$/),
@@ -69,10 +69,14 @@ describe('replay score stage', () => {
     for (const call of jev.calls) {
       const comments = (call.json.state as RequestState).comments
       expect(Object.keys(comments)).toEqual(['c1', 'c2', 'c3'])
-      expect(Object.values(comments).map((entry) => entry.path)).toEqual([
-        'src/coderabbitaibot-0.ts',
-        'src/coderabbitaibot-1.ts',
-        'src/coderabbitaibot-2.ts',
+      // Each pull request's comments share its per-PR file, in creation order.
+      const paths = Object.values(comments).map((entry) => entry.path)
+      const pr = paths[0]?.match(/^src\/coderabbitaibot-(\d+)-0\.ts$/)?.[1]
+      expect(pr).toBeDefined()
+      expect(paths).toEqual([
+        `src/coderabbitaibot-${pr}-0.ts`,
+        `src/coderabbitaibot-${pr}-1.ts`,
+        `src/coderabbitaibot-${pr}-2.ts`,
       ])
     }
   })

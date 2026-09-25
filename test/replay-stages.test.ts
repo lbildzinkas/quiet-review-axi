@@ -108,10 +108,10 @@ describe('replay output', () => {
 
     const result = await runReplay(['public-v1'], sandbox, gitHub)
 
-    expect(result.stdout).toContain('label,done,"real 3, noise 4, excluded 3"')
-    expect(result.stdout).toContain(
-      'excluded[2]{reason,count}:\n  anchor unmapped,2\n  conflicting replies,1',
-    )
+    // The reply "Thanks! Though this is by design." is one voice disputing the comment, so
+    // label-rules-v2 reads it as a disagreement (noise), not as conflicting replies.
+    expect(result.stdout).toContain('label,done,"real 3, noise 5, excluded 2"')
+    expect(result.stdout).toContain('excluded[1]{reason,count}:\n  anchor unmapped,2')
   })
 
   it('emits one JSON document with --json and writes progress to stderr', async () => {

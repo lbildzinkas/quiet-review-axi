@@ -37,6 +37,18 @@ export interface RepositorySpec {
   // Extra thread replies and resolution for a comment.
   replies?: (comment: CommentContext) => { login: string; type?: string; body: string }[]
   resolved?: (comment: CommentContext) => boolean
+  // Who resolved each thread (GraphQL `resolvedBy`), by login.
+  resolvedBy?: (comment: CommentContext) => string | undefined
+  // The pull request's commits in order (default: the comment's commit, then the head).
+  commits?: (pr: number) => { sha: string; subject: string }[]
+  // Follow-up commits on the base branch after the merge that change the commented line
+  // (default date: two days after the default merge time; default patch: the commented
+  // line modified).
+  followUps?: (
+    comment: CommentContext,
+  ) => { sha: string; subject: string; at?: string; patch?: string }[]
+  // The pull request's body.
+  prBody?: (pr: number) => string | null
   body?: (comment: CommentContext) => string
   // Field overrides for a root comment, for example to drop its line anchor.
   comment?: (comment: CommentContext) => Partial<FakeComment>
@@ -85,8 +97,17 @@ export function buildWorld(specs: RepositorySpec[]): FakeReplayWorld {
         title: spec.title?.(pr) ?? `Improve widget handling part ${pr}`,
         merged_at: spec.mergedAt ? spec.mergedAt(pr) : pr <= merged ? '2026-08-01T12:00:00Z' : null,
         head_sha: to,
+        body: spec.prBody?.(pr) ?? 'Makes widget handling more robust.',
+        base: 'main',
+        merge_commit_sha: `m-${slug}-${pr}`,
+        commits: spec.commits?.(pr) ?? [
+          { sha: from, subject: `Start widget handling part ${pr}` },
+          { sha: to, subject: `Finish widget handling part ${pr}` },
+        ],
         comments: [],
         resolved: {},
+        resolved_by: {},
+        followUps: [],
       }
       const files: FakeCompareFile[] = []
       let nextReply = 50
@@ -95,7 +116,9 @@ export function buildWorld(specs: RepositorySpec[]): FakeReplayWorld {
         for (let index = 0; index < (spec.perPr ?? 1); index++) {
           const id = (repositoryIndex + 1) * 1_000_000 + pr * 1000 + botIndex * 100 + index
           const context: CommentContext = { repository: spec.name, bot, pr, index, id }
-          const path = `src/${bot.replace(/\W/g, '')}-${index}.ts`
+          // One file per pull request, so a follow-up on one PR's file never reads as a
+          // follow-up on another's.
+          const path = `src/${bot.replace(/\W/g, '')}-${pr}-${index}.ts`
           pull.comments.push({
             ...rootComment({ id, bot, path, from, pr, index, body: spec.body }),
             ...spec.comment?.(context),
@@ -109,6 +132,25 @@ export function buildWorld(specs: RepositorySpec[]): FakeReplayWorld {
             })
           }
           if (pull.resolved) pull.resolved[id] = spec.resolved?.(context) ?? false
+          const resolver = spec.resolvedBy?.(context)
+          if (pull.resolved_by && resolver !== undefined) pull.resolved_by[id] = resolver
+          for (const followUp of spec.followUps?.(context) ?? []) {
+            pull.followUps?.push({
+              sha: followUp.sha,
+              subject: followUp.subject,
+              at: followUp.at ?? '2026-08-03T12:00:00Z',
+              path,
+              patch:
+                followUp.patch ??
+                [
+                  `@@ -${COMMENT_LINE - 1},3 +${COMMENT_LINE - 1},3 @@`,
+                  ` line ${COMMENT_LINE - 1}`,
+                  `-line ${COMMENT_LINE}`,
+                  `+line ${COMMENT_LINE} fixed upstream`,
+                  ` line ${COMMENT_LINE + 1}`,
+                ].join('\n'),
+            })
+          }
           if (spec.compareFile) {
             const file = spec.compareFile(context, path)
             if (file) files.push(file)

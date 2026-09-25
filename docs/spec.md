@@ -371,7 +371,7 @@ quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [-
 
 - `<name>` defaults to `default`. The replay directory defaults to `./.quiet-review/replays/<name>/` and is created on first use; `--dir` overrides it. `--config` defaults to `replay/<name>.config.json`, and the config's `name` must match `<name>`.
 - With no `--stage`, `replay` runs every stage that is not complete, in order, and stops at the first one that cannot complete. It stops before `evaluate` while the maintainer's disagreement review (10.6) is unfinished, and says so in `help`.
-- Each stage records its inputs' hash in `manifest.json`: `build` the config hash, `label` the hash of `items.jsonl`, `check` a hash of `labels.jsonl`, the label stage's input hash and the label prompt version, `score` the hashes of `items.jsonl` and the final labels, `evaluate` those plus `scores.jsonl`, the config hash and the check stage's trust verdict (10.6). Re-running a completed stage with unchanged inputs is a no-op; the one exception is `check`, which re-reads `review.jsonl` on every run (no model call) so the maintainer's labels are picked up. A stage that ran but waits on the maintainer is recorded with status `waiting`. Changing the config after `build` is refused (exit 2); a new replay name is needed. This protects the pre-registration.
+- Each stage records its inputs' hash in `manifest.json`: `build` the config hash, `label` the hash of `items.jsonl` (and the labelling-rules version, 10.5: a replay labelled under another rules version is never relabelled or re-checked in place, exit 2), `check` a hash of `labels.jsonl`, the label stage's input hash and the label prompt version, `score` the hashes of `items.jsonl` and the final labels, `evaluate` those plus `scores.jsonl`, the config hash and the check stage's trust verdict (10.6). Re-running a completed stage with unchanged inputs is a no-op; the one exception is `check`, which re-reads `review.jsonl` on every run (no model call) so the maintainer's labels are picked up. A stage that ran but waits on the maintainer is recorded with status `waiting`. Changing the config after `build` is refused (exit 2); a new replay name is needed. This protects the pre-registration.
 - `--stage label` before `build` has completed, `--stage check` or `--stage score` before `label`, and `--stage evaluate` before `score`, are `VALIDATION_ERROR` (exit 2).
 - **`score`** reads the final labels (10.6: once the label check's review is complete, `final-labels.jsonl`; before that, the automatic labels) and scores the `real` and `noise` items, never the excluded ones. Each pull request's drawn comments form one batch, keyed `c1`, `c2`, ... in creation order (then comment id), and go through the shared request builder of 5.2 with the PR's repository and title as the `pr` header, so the replay measures the requests `score` sends. Only the drawn comments of a PR are in its request, not every comment on it. All requests of the invocation share one `--max-cost` budget with the label check, the request cache and the cost log (section 9); the key is needed only for a paid call, so a missing key is `MISSING_KEY` (exit 4) after the free stages have completed and been recorded. The stage records the question pack version, provider, returned snapshots, calls and cost. A maintainer label that changes an item's final label changes the stage's input hash, so the next run scores again (unchanged requests come from the cache).
 - **Budget stop.** When `score` reaches `--max-cost`, nothing partial is written: the stage row shows `stopped` with how many items were scored, the help line gives the command that resumes, and the run exits 3. Everything paid for is cached, so the resumed run pays only for the rest.
@@ -386,7 +386,7 @@ quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [-
   | `candidates.jsonl` | `build` in discovery mode | qualifying candidate repositories (10.3) |
   | `build-log.jsonl` | `build` | every rejected repository or bot, with its reason (10.3) |
   | `items.jsonl` | `build` | every drawn comment, labelled or excluded, with its label evidence (10.5) |
-  | `labels.jsonl` | `label` | per item: `label`, exclusion `reason`, and the `changed`, `resolved`, `agree`, `disagree` signals |
+  | `labels.jsonl` | `label` | per item: `label`, exclusion `reason`, and the `changed`, `resolved`, `agree`, `disagree`, `withdrawn`, `resolved_by_bot`, `commit_match`, `followup_changed` signals |
   | `check.jsonl` | `check` | per sampled item: `automatic_label`, `ai_label`, `ai_reason`, `ai_readable`, the answering model snapshot and the answer's cost (10.6) |
   | `review.jsonl` | `check`, then the maintainer | the items awaiting the maintainer's review, with evidence and GitHub links; the maintainer sets `label` (10.6) |
   | `final-labels.jsonl` | `check`, once the review is complete | per item: final `label` and its `source` (`maintainer`, `agreed` or `automatic`) (10.6) |
@@ -976,7 +976,8 @@ A comment is **eligible** when all of these hold:
 - Its author is one of the configured bots.
 - Its PR was merged inside the window.
 - It has a `diff_hunk` and a line anchor (`line`, or `original_line` for outdated comments).
-- It is not a pure bot summary or walkthrough posted as an inline comment (detected by the bot's known summary markers: CodeRabbit's `walkthrough_start` and summary HTML comments, and `Walkthrough`, `Pull Request Overview` or `Greptile Summary` headings).
+- It is not a pure bot summary or walkthrough posted as an inline comment (detected by the bot's known summary markers: CodeRabbit's `walkthrough_start` and summary HTML comments, and `Walkthrough`, `Pull Request Overview` or `Greptile Summary` headings), and not a comment about the pull request's title or description (Gemini's "Pull Request Title and Summary" block and its `Suggested PR Title:` / `Suggested PR Summary:` headings; these review the PR's metadata, not its code).
+- Its PR is not a pure revert (a title matching `Revert ...`, which is how GitHub titles a generated revert pull request): a revert restores old code instead of accepting review, so labels on it would measure nothing about the bot's findings.
 
 Sampling (deterministic, from `seed`):
 
@@ -996,6 +997,10 @@ Human-authored comments are not part of the evaluated set. They are still fetche
 Every drawn comment is labelled `real`, `noise` or `excluded`.
 All signals come from GitHub data recorded at build time.
 
+The rules are **versioned**: the label stage records a `label_rules` version in the manifest (`label-rules-v1` for the rules public-v1 was labelled with, `label-rules-v2` for the current rules, revised after the adjudication of public-v1's label check). Once a replay was labelled under one version, a build carrying another refuses to relabel or re-check it (exit 2): revised rules ship under a new replay name, so replays stay comparable with the rules they were pre-registered with.
+
+**Label definition.** `real` means the author acted on the comment, or a careful author would have acted on it; `noise` means the comment did not deserve that action. One recorded policy decision: **a latent defect that cannot happen in the merged product is `noise`** (a race or misuse that needs a code path the product never exercises). The automatic rules cannot detect that; the label check's model and the maintainer apply it.
+
 **Main signal: `changed`.** Did the commented lines change after the comment and before merge?
 
 1. `from` = the comment's `original_commit_id` (the head commit when the comment was written). `to` = the PR's final head commit before merge.
@@ -1003,15 +1008,19 @@ All signals come from GitHub data recorded at build time.
 3. Fetch the diff of the comment's file between `from` and `to` (compare API).
 4. `changed = true` when any removed or modified line of that diff falls inside the anchor. Pure additions directly next to the anchor also count, because a fix is often an inserted check. Line numbers are those of the `from` side; the added half of a modification is located by its removed lines, and a pure addition counts when it is inserted inside the widened anchor or directly after its last line.
 
-**Supporting signals.**
+**Supporting signals.** Each reply in the comment's own thread is read as one voice: agent signature footer lines (`Co-Authored-By:`, `Generated by ...`, `Addressed by ...`, `Written by ...` — the lines coding agents append to say which agent posted) are stripped first, and a reply that disputes the comment counts as a disagreement even when it also names the commit that pinned the disputed behaviour. Review bodies and PR conversation comments are not read in v0.
 
 - `resolved`: the review thread's `isResolved` (GraphQL).
-- `agree`: a reply in the thread from a human (not a bot) matches an agreement pattern: `fixed`, `done`, `good catch`, `addressed`, `updated`, `thanks`, or a commit SHA or link.
-- `disagree`: a human reply matches a disagreement pattern: `not an issue`, `won't fix`, `wontfix`, `intentional`, `by design`, `false positive`, `incorrect`, `not needed`, `ignore`.
+- `resolved_by`: the login that resolved the thread (GraphQL `resolvedBy`), kept in the working data only; the label check's model learns the role ("the review bot", "another bot", "a person"), never the login (D8).
+- `agree`: a person reply matches an agreement pattern (`fixed`, `done`, `good catch`, `addressed`, `updated`, `thanks`), or a reply from **any** account — including the PR author's coding agent — names a commit SHA that is one of the PR's commits **after** the comment (`commits_after`, recorded at build: sha and subject in order). A SHA naming a commit from before or at the comment is not agreement.
+- `disagree`: a person reply matches a disagreement pattern: `not an issue`, `won't fix`, `wontfix`, `intentional`, `by design`, `false positive`, `incorrect`, `not needed`, `ignore`, `no code change needed`, `not actionable`, `not applicable`, `does not apply`, `working as intended`.
+- `withdrawn`: the reviewing bot's own reply matches a withdrawal pattern (`withdraw ...`, `does not apply`, `not applicable`, `false positive`): the bot retracted its finding. Withdrawals from other bots are ignored.
+- `resolved_by_bot`: the reviewing bot itself resolved the thread, and its resolve behaviour is trusted as a fix — a per-bot setting, because what a self-resolve means differs per bot. Verified against public-v1's data for `cursor[bot]` only (Cursor Bugbot resolves its own thread when a later commit fixes the issue, adjudication items 4, 5 and 10); the other bots were only seen resolving together with a withdrawal, so their self-resolves alone are not trusted.
+- `commit_match`: a commit in `commits_after` whose subject repeats the comment heading's key terms — the heading is the comment's first markdown heading or bold title line (the formats Cursor Bugbot, CodeRabbit and Greptile use), and the subject must contain at least two of its terms of four or more characters, or one distinctive term of eight or more. A fix often lands outside the commented lines; its commit usually says so.
+- `followup_changed`: a commit on the PR's base branch changed the commented lines within about 7 days after the merge (`followups`, recorded at build: sha and subject). The first hour after the merge is skipped, and the merge commit and the PR's own commits are excluded, so the merge itself (a squash commit, or a rebased commit carrying a new sha) is never read as a follow-up. The anchor's line numbers are those of the PR head, which the base branch shares right after the merge; drift within the window is an accepted approximation.
 
 The pattern lists are fixed in code before the replay, and the unit tests cover them.
 Patterns match case-insensitively as whole words (`won't` also with a typographic apostrophe). A commit SHA is 7-40 hex characters containing at least one digit, bare or inside a commit link.
-Only replies in the comment's own thread are evidence; review bodies and PR conversation comments are not read in v0.
 
 **Label rules**, applied in order:
 
@@ -1019,11 +1028,18 @@ Only replies in the comment's own thread are evidence; review bodies and PR conv
 |---|---|---|
 | 1 | `from` or `to` cannot be fetched (force-push lost the commit), the anchor cannot be mapped, or the file was deleted or renamed after the comment | `excluded` (reason recorded) |
 | 2 | More than 50% of the file's lines changed between `from` and `to` (large rewrite; a change at the anchor may be coincidence) | `excluded: rewrite` |
-| 3 | `agree` and `disagree` both present | `excluded: conflicting replies` |
-| 4 | `changed` and `disagree` | `excluded: conflicting signals` |
-| 5 | `changed` | `real` |
-| 6 | not `changed`, and `agree` and `resolved` (fixed somewhere else) | `real` |
-| 7 | anything else (not changed; ignored, dismissed, or resolved without a change) | `noise` |
+| 3 | `agree` and `disagree` both present (in different replies) | `excluded: conflicting replies` |
+| 4 | `withdrawn` (the reviewing bot retracted its finding) | `noise`, even when the lines changed |
+| 5 | `disagree` (a person disputed the comment) | `noise`, even when the lines changed: a disagreement overrides a coincidental edit at the anchor |
+| 6 | `changed` | `real` |
+| 7 | not `changed`, and `agree` and `resolved` (fixed somewhere else) | `real` |
+| 8 | not `changed`, and `resolved_by_bot` (a trusted reviewing bot resolved its own thread) | `real` |
+| 9 | not `changed`, and `commit_match` (a later commit's subject repeats the comment heading's terms) | `real` |
+| 10 | not `changed`, and `followup_changed` (a follow-up on the base branch changed the commented lines) | `real` |
+| 11 | `from` = `to`: the comment sat on the PR's final head commit, so nothing in the PR could have acted on it, and no reply, resolve, later-commit or follow-up evidence was found | `excluded: no commits after comment` |
+| 12 | anything else | `noise` |
+
+Rule 5 replaces label-rules-v1's `excluded: conflicting signals` (a change the author disputed): the adjudication of public-v1 found that a disputed coincidental edit is `noise`, not unclear evidence. Rule 11 drops the other weak class: a comment with no commits after it and no other fix evidence was a coin flip the rules lost as often as won (the adjudication confirmed 7 of 12 as `noise`, 5 as missed `real`), so it leaves the dataset instead, and the label stage's `excluded_by_reason` reports how many.
 
 Rule 1's recorded reasons: `commit unavailable` (the comparison is not found); `history rewritten` (the comparison's merge base is not `from`, so `from` is no longer an ancestor of `to`); `anchor unmapped`; `file deleted`; `file renamed`; `diff unavailable` (GitHub returned no patch for the file, or listed 300 files, its maximum, without it); `file unavailable` (the file's line count at `from`, needed for rule 2, could not be read; the contents endpoint refuses files larger than 100 MB with a 403 naming the file too large).
 Rule 2 measures the share as the file's deleted or modified lines (the comparison's `deletions`) over its line count at `from`; exactly 50% is not a rewrite.
@@ -1032,9 +1048,11 @@ A nit or style comment that led to a change is labelled `real`: the author acted
 
 Known weaknesses, which the label check (10.6) measures:
 
-- coincidental edits near the anchor (false `real`);
-- fixes made in another file with no reply (false `noise`);
-- bots that fix things themselves through committable suggestions (counted as `real`, which is correct: the suggestion was accepted).
+- coincidental edits near the anchor can still pass rules 6, 9 and 10 (false `real`), though a withdrawal or disagreement now overrides the anchor edit;
+- a fix in another file with no reply, resolve or matching commit subject is still missed (false `noise`);
+- a follow-up commit on the same lines for an unrelated reason counts as a fix (false `real`);
+- a valid comment merged over with no change anywhere is dropped by rule 11 rather than mislabelled (it was the largest false-`noise` class in public-v1);
+- bots that fix things themselves through committable suggestions are counted as `real`, which is correct: the suggestion was accepted.
 
 ### 10.6 Label check (AI labels plus maintainer review of disagreements)
 
@@ -1047,10 +1065,12 @@ This is the only chat-model use in v0 (R17). The `check` stage carries it out.
 2. **AI labels.** A strong general model, pinned in the config and reached through the configured backend (OpenRouter's chat API, `POST https://openrouter.ai/api/v1/chat/completions`, by default; or the Pi CLI on a subscription, below), labels each item independently. It receives:
    - the comment and its hunk at comment time;
    - the file's diff from `from` to `to` at the anchor;
-   - the thread replies and resolution status.
+   - the pull request's title and description;
+   - the subjects of the PR's commits after the comment, and any follow-up commit on the base branch that changed the commented lines (short sha and subject);
+   - the thread replies, the resolution status, and who resolved the thread (as a role: the review bot, another bot, or a person — never a login, D8).
 
-   It does **not** receive the automatic label. It answers `real` or `noise` (plus `unsure`) against the same definition as the automatic rules: "Did the author act on this comment, or would a careful author have acted on it?" Its prompt is a fixed template; its answers are stored with the model id and cost.
-   - **Template.** The wording lives only in `src/replay/label-prompt.json`, versioned (`label-check-v1`); changing it is a new version, which re-labels the sample. The system message holds the instructions; the user message holds the evidence as one JSON object with `path`, `lines`, `comment` (cleaned as in 5.3), `code` (the hunk), `changes_after_comment`, `resolved` and `replies`. `changes_after_comment` is the file diff's hunks that touch the commented lines widened by 10 lines (at most 4,000 characters), or a sentence saying why none are shown (the file did not change, GitHub returned no diff, or nothing changed within 10 lines of the commented lines). Replies carry `from` (`person` or `bot`) and their text (at most 10 replies of 1,000 characters), never an author login (D8). Comment and reply text is data only, never part of the instructions (5.3). The request sets `temperature: 0` and `max_tokens: 1024`; the same data always gives a byte-identical request (R17).
+   It does **not** receive the automatic label. It answers `real` or `noise` (plus `unsure`) against the same definition as the automatic rules: "Did the author act on this comment, or would a careful author have acted on it?" — including the recorded policy that a latent defect which cannot happen in the merged product is `noise` — and it is told to answer `unsure` when deciding would turn on code outside the shown hunk, on library behaviour it cannot check, or on any other claim it cannot verify from the evidence (every wrong `real` in public-v1's check rested on an unverifiable premise). Its prompt is a fixed template; its answers are stored with the model id and cost.
+   - **Template.** The wording lives only in `src/replay/label-prompt.json`, versioned (`label-check-v2`); changing it is a new version, which re-labels the sample. The system message holds the instructions; the user message holds the evidence as one JSON object with `path`, `lines`, `comment` (cleaned as in 5.3), `code` (the hunk), `changes_after_comment`, `pr_title`, `pr_description` (cleaned, at most 2,000 characters), `later_commit_subjects` (at most 10), `followup_fixes` (at most 3, short sha and subject), `resolved`, `resolved_by` (the role) and `replies`. `changes_after_comment` is the file diff's hunks that touch the commented lines widened by 10 lines (at most 4,000 characters), or a sentence saying why none are shown (the file did not change, GitHub returned no diff, or nothing changed within 10 lines of the commented lines). Replies carry `from` (`person` or `bot`) and their text (at most 10 replies of 1,000 characters), never an author login (D8). Comment and reply text is data only, never part of the instructions (5.3). The request sets `temperature: 0` and `max_tokens: 1024`; the same data always gives a byte-identical request (R17).
    - **Answer.** The model is asked for one JSON object `{"label": "real" | "noise" | "unsure", "reason": "..."}`. The first JSON object in the answer is read, also when prose or a code fence surrounds it; braces in that prose belong to no object, so the first balanced object that parses and has a valid `label` is read. An answer that cannot be read counts as `unsure` with the reason `Unreadable answer: ...`, so the item goes to the maintainer instead of failing a paid run; the output warns how many answers could not be read. A response that is not a chat completion at all is `INVALID_RESPONSE` (exit 4) and is not cached.
    - **Price and budget (OpenRouter).** Before the first paid call of a run, the model's per-token prices are read from OpenRouter's public model list (`GET https://openrouter.ai/api/v1/models`, no key). Each listed price is read strictly: a fixed price is a plain decimal number at least 0. A model the list does not include, one whose prompt or completion price is absent, or one with a listed price that is not fixed (empty, or `-1` for variable-price routers), is `VALIDATION_ERROR` (exit 2): the config is frozen after `build`, so a corrected model needs a new replay name. A request price the list omits is read as $0. Each call is estimated and counted against `--max-cost` as in 9.4; after the call, spend is the reported `usage.cost`, or the observed tokens at the listed prices when no cost is reported.
    - **Calls (OpenRouter).** Calls go one at a time in id order, with the provider retry policy and error mapping of section 7 and a 120 s timeout per attempt. The key is `OPENROUTER_API_KEY` or the user config's `keys.openrouter` (9.1), needed only when a paid call is made. Every answer is cached (9.2) and every attempt, cache hits included, is logged (9.3).
@@ -1188,12 +1208,12 @@ src/replay/
   config.ts                    replay config schema and pre-registration hash
   store.ts                     replay directory: stage records, JSON Lines outputs
   fetch.ts                     GitHub response cache and search pacing for build (8.1)
-  github.ts                    replay reads: search, repository, PRs, threads, comparisons, files
+  github.ts                    replay reads: search, repository, PRs, threads and resolvers, PR commits, comparisons, files, base-branch commits
   discover.ts                  candidate discovery when the config lists no repositories (10.3)
   build.ts                     the build stage: qualification, eligibility, drawing, evidence
   select.ts                    repository and bot qualification (10.3)
   sample.ts                    eligibility and capped stratified sampling (10.4)
-  label.ts                     diff anchoring and label rules (10.5)
+  label.ts                     diff anchoring and the versioned label rules, with per-bot resolve settings (10.5)
   check.ts                     the check stage: sample, AI labels, review read-back, final labels, trust gate (10.6)
   label-check.ts               sample drawing, evidence and request building, answer reading, agreement, review lines (10.6); pure
   label-model.ts               the label backend interface, and asking the sample in order with cache, budget and call log (10.6)
