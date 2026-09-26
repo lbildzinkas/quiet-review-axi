@@ -14,6 +14,7 @@ v0 is decided by an accuracy replay on public pull requests: it checks whether J
 The project continues only if the replay passes a rule fixed in advance (AUROC ≥ 0.75, and collapsing at least 40% of noise while hiding at most 5% of real issues).
 Until then, the verdict cut-offs are the generic 0.30 / 0.70 band, labelled `uncalibrated` in every output.
 The first live replay, [`public-v1`](replay/public-v1.result.md) (2026-09-24), was inconclusive: its automatic labels failed the label check's trust gate, so the pass rule was not judged and the go/no-go decision is still open.
+What the public replays found, and why Jev falls short for this task, is written up in [docs/findings.md](docs/findings.md).
 
 | Command | State |
 |---|---|
@@ -216,6 +217,7 @@ The calibration maths (AUROC, threshold sweep, bootstrap ranges, abstain band, s
 ## Documents
 
 - [docs/spec.md](docs/spec.md): the v0 specification
+- [docs/findings.md](docs/findings.md): findings from the replays on public pull requests
 - [docs/jev-guide.md](docs/jev-guide.md): how the Jev model works and how to build on it
 
 ## License
