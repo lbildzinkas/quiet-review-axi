@@ -322,6 +322,53 @@ export async function fetchCompare(
   }
 }
 
+// The pull request's base commit, or null when the pull request cannot be read.
+export async function baseSha(
+  client: GitHubClient,
+  repository: string,
+  number: number,
+): Promise<string | null> {
+  const [owner = '', repo = ''] = repository.split('/')
+  try {
+    const pull = await client.rest.pulls.get({ owner, repo, pull_number: number })
+    return pull.data.base.sha
+  } catch (error) {
+    if (isMissing(error)) return null
+    throw gitHubError(error, `${repository}#${number}`)
+  }
+}
+
+// The files of a three-dot comparison (the changes on `to` since it forked from `from`'s
+// history), or null when it cannot be read.
+export async function fetchCompareFiles(
+  client: GitHubClient,
+  repository: string,
+  from: string,
+  to: string,
+): Promise<CompareFile[] | null> {
+  return (await fetchCompare(client, repository, from, to))?.files ?? null
+}
+
+// A file's text at a commit, or null when it cannot be read (missing, not a file, or too large).
+export async function fetchFileText(
+  client: GitHubClient,
+  repository: string,
+  path: string,
+  ref: string,
+): Promise<string | null> {
+  const [owner = '', repo = ''] = repository.split('/')
+  try {
+    const response = await client.rest.repos.getContent({ owner, repo, path, ref })
+    const data = response.data as { type?: string; encoding?: string; content?: string }
+    if (data.type !== 'file' || data.encoding !== 'base64' || data.content === undefined)
+      return null
+    return Buffer.from(data.content, 'base64').toString('utf8')
+  } catch (error) {
+    if (isMissing(error) || isOversized(error)) return null
+    throw gitHubError(error, `${path} at ${ref} in ${repository}`)
+  }
+}
+
 // The number of lines of a file at a commit, or null when it cannot be read.
 export async function fetchFileLines(
   client: GitHubClient,

@@ -29,6 +29,10 @@ export interface JudgeRunFacts {
   cachedCalls: number
   costUsd: number
   snapshots: string[]
+  // Input tokens of every call, cache hits included, as each response reported them.
+  inputTokens: number
+  // What the calls cost when they were paid for; cache hits count their first cost.
+  answersCostUsd: number
   // Items left unjudged because the run stopped at --max-cost (spec 9.4).
   unjudged: string[]
 }
@@ -45,7 +49,15 @@ const LABEL_CUTOFFS = resolveCutoffs({
 // cache, budget and cost log, and reports each item's worth-acting-on probability with the
 // snapshot that answered it. Items of a batch cut short by the budget are left out.
 export function createJevJudge(options: JevJudgeOptions) {
-  let facts: JudgeRunFacts = { calls: 0, cachedCalls: 0, costUsd: 0, snapshots: [], unjudged: [] }
+  let facts: JudgeRunFacts = {
+    calls: 0,
+    cachedCalls: 0,
+    costUsd: 0,
+    snapshots: [],
+    inputTokens: 0,
+    answersCostUsd: 0,
+    unjudged: [],
+  }
   const judge: Judge<JudgeItem, JevJudgment> = {
     judge: async (items) => {
       const batches = groupBatches(items)
@@ -104,6 +116,8 @@ export function createJevJudge(options: JevJudgeOptions) {
           0,
         ),
         snapshots: [...new Set(run.calls.map((call) => call.result.snapshot))].sort(),
+        inputTokens: run.calls.reduce((total, call) => total + call.result.inputTokens, 0),
+        answersCostUsd: run.calls.reduce((total, call) => total + call.result.costUsd, 0),
         unjudged: items.filter((entry) => !judged.has(entry.id)).map((entry) => entry.id),
       }
       return judgments

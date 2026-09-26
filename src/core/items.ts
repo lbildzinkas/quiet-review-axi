@@ -12,6 +12,10 @@ export interface Item {
   lines: string | null
   author: string | null
   url: string | null
+  // Context blocks (the replay's context ablation): the commented file around the comment at
+  // the comment's commit, and the rest of the diff hunk after the commented line.
+  file?: string
+  hunkRest?: string
 }
 
 const MAX_BODY_CHARACTERS = 2000
@@ -21,7 +25,8 @@ const HUNK_TAIL_LINES = 25
 const FOOTER_LINES = [/^\s*_?Copilot uses AI\. Check for mistakes\._?\s*$/i]
 
 // Body cleaning (spec 5.3): a pure function, so the same comment always yields the same state.
-export function cleanBody(raw: string): string {
+// Longer texts, such as a pull request's description in a context block, pass their own cut.
+export function cleanBody(raw: string, maxCharacters = MAX_BODY_CHARACTERS): string {
   let body = raw.replace(/\r\n?/g, '\n').replace(/<!--[\s\S]*?-->/g, '')
   body = removeDetailsBlocks(body)
     .replace(/!\[[^\]]*\]\([^)]*\)[ \t]*/g, '')
@@ -35,7 +40,7 @@ export function cleanBody(raw: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .replace(/^\n+/, '')
     .trimEnd()
-    .slice(0, MAX_BODY_CHARACTERS)
+    .slice(0, maxCharacters)
 }
 
 // Removes innermost <details> blocks first, until none are left.

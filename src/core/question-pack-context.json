@@ -1,0 +1,83 @@
+{
+  "version": "v0.1-context.1",
+  "placeholders": {
+    "{item}": "the item's key in the state, for example c3",
+    "{candidate}": "an earlier item's key offered as a duplicate option"
+  },
+  "questions": {
+    "act": {
+      "type": "noul",
+      "instructions": {
+        "review_comment": "`comments.{item}.comment`",
+        "code_under_review": "`comments.{item}.code`",
+        "rest_of_hunk": "`comments.{item}.hunk_rest`",
+        "surrounding_code": "`comments.{item}.file`",
+        "pull_request_description": "`pr.description`",
+        "linked_issue": "`pr.linked_issue`",
+        "question": "Does `comments.{item}.comment` point out a concrete problem in `comments.{item}.code` that the author of the change should fix before merging, given what the pull request sets out to do and the code around the change?"
+      },
+      "criteria": {
+        "true": "The comment names a specific defect, risk or mistake that is visible in or directly implied by the shown code and its context, and changing the code as the comment asks would fix a real problem.",
+        "false": "The comment summarizes, praises or restates the change; asks a question without claiming a problem; gives generic advice that is not tied to the shown code; states a matter of taste with no concrete harm; makes a claim that the shown code and its context do not support; or asks for something that the surrounding code already handles or that the pull request deliberately leaves out."
+      }
+    },
+    "cat": {
+      "type": "choice",
+      "instructions": "What kind of comment is the review comment `comments.{item}.comment` about `comments.{item}.code`?",
+      "criteria": {
+        "bug": {
+          "what": "Incorrect behaviour: a logic error, crash, wrong result, missing error handling, race or broken edge case",
+          "not_for": "Speed or security problems, which have their own options"
+        },
+        "security": {
+          "what": "A vulnerability or unsafe handling of secrets, input, authentication or permissions"
+        },
+        "performance": {
+          "what": "Unnecessary work, slow queries, excess memory or network use"
+        },
+        "style": {
+          "what": "Naming, structure, readability or idiom, with behaviour unchanged",
+          "not_for": "One-character or whitespace fixes, which are nits"
+        },
+        "docs": {
+          "what": "Comments, docstrings, README, changelog or other documentation"
+        },
+        "nit": {
+          "what": "A trivial fix such as a typo, whitespace, import order or an unused variable"
+        },
+        "wrong": {
+          "what": "The comment's claim is incorrect: the problem it describes is not present in the shown code"
+        },
+        "test_gap": {
+          "what": "Missing, weak or broken tests for the changed code"
+        },
+        "question": {
+          "what": "Asks the author something without claiming a problem"
+        },
+        "summary_or_praise": {
+          "what": "Summarizes, describes or praises the change without raising a problem"
+        },
+        "other": {
+          "what": "None of the other options fits"
+        }
+      }
+    },
+    "sev": {
+      "type": "score",
+      "instructions": "If the problem that the review comment `comments.{item}.comment` describes is real, how serious would it be once `comments.{item}.code` is merged?",
+      "criteria": [
+        "The comment describes no problem: it is a summary, praise, a question or a restatement of the change",
+        "Cosmetic: naming, formatting, wording or taste; the program behaves exactly the same",
+        "Minor: readability, maintainability, a small missing check or a documentation gap that is unlikely to affect users",
+        "Moderate: wrong behaviour in some cases, noticeably slower code, or changed logic left without tests",
+        "Severe: a likely crash, data loss, security hole or broken core feature"
+      ]
+    },
+    "dup": {
+      "type": "choice",
+      "instructions": "Does the review comment `comments.{item}.comment` raise the same problem as one of the earlier comments listed as options? Pick that comment, or `none`.",
+      "candidate": "`comments.{candidate}.comment`",
+      "none": "No earlier comment raises the same problem; a related comment about a different problem is not a duplicate"
+    }
+  }
+}

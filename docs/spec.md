@@ -1,6 +1,6 @@
 # Quiet Review v0 specification
 
-Status: **v0 in progress.** `score <pr-url>` and `score --findings` are implemented (M1, the scoring core, M5), and so are the replay's `build` and `label` stages (M2), its `check` stage with the maintainer review loop (M3), and its `score` and `evaluate` stages, `report`, the question-pack `gate` and the `smoke` set (M4).
+Status: **v0 in progress.** `score <pr-url>` and `score --findings` are implemented (M1, the scoring core, M5), and so are the replay's `build` and `label` stages (M2), its `check` stage with the maintainer review loop (M3), and its `score` and `evaluate` stages, `report`, the question-pack `gate` and the `smoke` set (M4). The context ablation (`ablate`, 4.10 and 10.11) compares richer-context variants on a labelled replay.
 Date: 2026-09-23.
 
 Quiet Review scores AI code-review comments so that low-value ones can be collapsed and only real issues surface.
@@ -148,7 +148,7 @@ The shape follows the `axi-sdk-js` conventions used by `gh-axi` and `lavish-axi`
 - Every successful response ends with a `help[n]:` list of next-step hints, each phrased ``Run `...` to ...``.
 - Errors are rendered as `error:`, `code:` and optional `help[n]:`.
 - Built-in `--help` and `-v/--version` come from the SDK. The SDK's npm self-update is shadowed while v0 is not on npm (R15): `update` prints the repository install command and installs nothing, so it can never fetch an unrelated npm package of the same name.
-- Besides the commands of R12, `gate` (4.8) and `smoke` (4.9) carry the question-pack checks of 5.4.5. `replay`, `report`, `gate` and `smoke` offer compact TOON and `--json`; `--human` is for `score`.
+- Besides the commands of R12, `gate` (4.8) and `smoke` (4.9) carry the question-pack checks of 5.4.5, and `ablate` (4.10) runs the context ablation of 10.11. `replay`, `report`, `gate`, `smoke` and `ablate` offer compact TOON and `--json`; `--human` is for `score`.
 
 ### 4.1 Global flags
 
@@ -392,8 +392,10 @@ quiet-review-axi replay [<name>] [--stage <build|label|check|score|evaluate>] [-
   | `final-labels.jsonl` | `check`, once the review is complete | per item: final `label` and its `source` (`maintainer`, `agreed` or `automatic`) (10.6) |
   | `scores.jsonl` | `score` | per scored item: `id`, `snapshot`, `worth`, `category`, `severity`, `dup_of` (no comment text) |
   | `result.json` | `evaluate` | the metrics, ranges, sweep, breakdowns, label-check-sample metrics, the label check's `trust` and `trust_reasons` (10.6), and pass-rule outcome of 10.7-10.8 (aggregates only) |
-  | `runs.jsonl` | `evaluate`, `gate` | one line per evaluation or gate run: kind, question pack, provider, snapshots and results (aggregates only) |
+  | `runs.jsonl` | `evaluate`, `gate`, `ablate` | one line per evaluation, gate or ablation run: kind, question pack(s), provider, snapshots and results (aggregates only) |
   | `gates/<pack>.json` | `gate` | the last gate run for that candidate pack version (4.8) |
+  | `ablation/result.json` | `ablate` | the last context ablation's comparison (4.10, 10.11; aggregates only) |
+  | `ablation/scores/<variant>.jsonl` | `ablate` | per variant, the same rows as `scores.jsonl` (no comment text) |
 
 - The output adds `excluded[n]{reason,count}` once `label` has run, `rejected[n]{kind,candidate,reason}` for rejected repositories and bots (the first 20, with `rejected_total` and a help line pointing to `build-log.jsonl` when there are more), and a `warnings` line when the dataset covers fewer than 3 bots or a repository count outside 5-8 (R9).
 - Once `check` has run, the output adds `label_backend` (`openrouter` or `pi`), `label_model`, `label_check_cost_usd` (what the sample's answers cost when they were paid for; cache hits count their first cost), `trust` (`pending review`, `ok` or `inconclusive`, 10.6) and, when inconclusive, `trust_reasons`. A warning is added when the label model gave answers that could not be read.
@@ -511,6 +513,46 @@ Scores the built-in smoke set, `src/smoke/smoke-set.json`: 20 unmistakable revie
 - Loose bounds: a real example must score at least **0.7**, a noise example below **0.3**. The output is `smoke: pass` or `smoke: fail` with an `outside_bounds[n]{id,expected,worth,bound}` table; `--json` lists every example. Examples outside their bounds are data: the exit code stays 0.
 - It needs a real key and is run by hand after a Jev model update (with `--no-cache`) or before a release. It never runs in automated checks (5.4.5).
 
+### 4.10 `ablate` (context ablation)
+
+```
+quiet-review-axi ablate [<replay>] [--variants <file>] [--config <file>] [--dir <path>]
+                        [--provider <openrouter|typesafe>] [--max-cost <usd>] [--no-cache] [--json]
+```
+
+Scores an already-labelled replay's `real` and `noise` items under each context variant of a variants file, next to the baseline, and compares them (10.11). It is an exploratory measurement: it never changes the replay's stages, `result.json`, verdict or cut-offs.
+
+- The replay needs a completed `label` stage; it reads the final labels as `score` does (10.6 step 5). Its config must be the one `build` ran with (exit 2 otherwise), because the config's seed and pass-rule limits measure every variant. A replay whose label check made it `inconclusive` can still be ablated; the output shows `label_trust` so the reader knows the labels are not trusted.
+- `--variants` defaults to `replay/<replay>.variants.json`, committed before the ablation runs, as the replay config is. It is strict: `{ "variants": [ { "name": "pr", "blocks": ["pr_description"] }, ... ] }`, at least one variant, names of letters, digits, dots, dashes or underscores and unique, never `baseline`, `bot`, `items` or `real`, and `blocks` a subset of `pr_description`, `linked_issue` and `wider_code` (an empty list is allowed: the context pack's wording with no block). Anything else is `VALIDATION_ERROR` (exit 2); so is a missing file.
+- **Baseline.** Always scored first, with no entry in the file: the built-in pack and no block, so its requests are byte-identical to the `score` stage's and come from the cache. Every declared variant is scored with the context pack (5.4.5).
+- **Context.** When any variant has a block, the blocks are read from GitHub first (10.11), through the replay's read-only client and its `github/` cache, so a re-run reads nothing from the network. The GitHub token is needed only then.
+- **Scoring.** Each variant's items go through the shared request builder, request cache, cost log and provider as the `score` stage (5.2, section 9), batched per pull request. `--max-cost` covers the whole ablation: each variant gets what the earlier ones left. On a stop, nothing is written, the output shows `stopped: max-cost`, `code: BUDGET_STOP`, which variants finished, how many items of the stopped one were scored and `run_cost_usd`, with the resume command, and the run exits 3. Everything paid for is cached. `--provider` defaults to the provider the replay was scored with.
+- **Output.**
+
+  ```
+  ablation: public-v2
+  variants_file: replay/public-v2.variants.json
+  label_trust: inconclusive
+  items: 250
+  real: 118
+  noise: 132
+  context[3]{block,shown,missing}:
+    pr_description,58 of 60 pull requests,no description 2
+    linked_issue,14 of 60 pull requests,no linked issue 46
+    wider_code,241 of 250 comments (rest of hunk on 190),"file unavailable 9; rest of hunk: comment at the hunk end 52; rest of hunk: hunk not found 8"
+  variants[3]{variant,question_pack,blocks,items,auroc,auroc_ci95,auroc_change,auroc_change_ci95,best_threshold,noise_collapsed,noise_collapsed_ci95,real_hidden,input_tokens,tokens_per_item,cost_usd}:
+    baseline,v0.1,none,250,0.569,0.498-0.638,0,0-0,0.05,0.03,0.008-0.061,0.042,262000,1048,0.011
+    pr,v0.1-context.1,pr_description,250,0.61,0.54-0.68,0.041,0.004-0.079,0.12,0.11,0.06-0.17,0.05,301000,1204,0.0126
+    all,v0.1-context.1,pr_description+linked_issue+wider_code,250,0.64,0.57-0.71,0.071,0.02-0.12,0.15,0.16,0.1-0.22,0.05,755000,3020,0.0317
+  by_bot[4]{bot,items,real,baseline,pr,all}:
+    ...
+  note: "exploratory: the ablation never changes the replay's verdict or cut-offs, and best_threshold is chosen on the same data it is measured on"
+  cost_usd: 0.0443
+  ```
+
+  All numbers above are illustrative. `context` lists how often each block used by a variant could be shown, and why not where it could not. `auroc_change` is the variant's AUROC minus the baseline's on the same items, with a paired 95% range (10.11); rates and AUROC print to three decimals, ranges as `low-high`. `best_threshold`, `noise_collapsed` and `real_hidden` follow 10.7 per variant (the most noise collapsed while hiding at most `max_real_hidden` of real items). `input_tokens` are the variant's observed input tokens, cache hits included; `cost_usd` per variant is what its answers cost when they were paid for (cache hits count their first cost); the last `cost_usd` is what this run paid. `by_bot` gives each bot's AUROC per variant. `--json` emits the same fields as one document.
+- **Files.** Each variant's score rows go to `ablation/scores/<variant>.jsonl`, the comparison with every metric and range (keep precision and the real-hidden range included) to `ablation/result.json`, and a line to `runs.jsonl`, all aggregates without comment text (10.9).
+
 ---
 
 ## 5. Jev request design
@@ -573,7 +615,7 @@ Code builds the state; Jev never sees anything else. Rules:
 - **Not in the state:**
   - **The author (D8).** Who wrote a comment must not sway whether it is worth acting on. The author is still fetched and kept for output and per-bot reporting.
   - Replies, resolution status and reactions (label leakage in the replay).
-  - The PR body (context rot; see 14, question 13).
+  - The PR body (context rot; see 14, question 13). The context ablation (10.11) measures it and the other context blocks as opt-in variants; `score` and the replay's own stages never send them.
   - Later commits.
   - Timestamps.
 - Comment text is third-party input. It stays in named data fields and is never concatenated into `instructions` ([jev-guide.md](jev-guide.md) 3.2, last rows). The test suite includes injected text (11.3).
@@ -672,12 +714,13 @@ Output shows the expectation `score` (0-4) and sorts by it; `--json` also shows 
 
 Question wording and thresholds are empirical: whether a wording is better can only be measured against real answers, never asserted by a unit test. So:
 
-1. **One versioned data file.** The instructions, options and Score levels of 5.4.1-5.4.4 live in `src/core/question-pack.json`, with a `version` field. The tool loads it; `{item}` and `{candidate}` placeholders are filled with item keys by code, never with comment text. A wording change is a pack edit with a new version, not a code change.
+1. **One versioned data file.** The instructions, options and Score levels of 5.4.1-5.4.4 live in `src/core/question-pack.json`, with a `version` field (the context ablation's pack is a second file, point 6). The tool loads it; `{item}` and `{candidate}` placeholders are filled with item keys by code, never with comment text. A wording change is a pack edit with a new version, not a code change.
 2. **Recorded everywhere.** The pack version is part of every request body's cache key (through the wording itself), and is recorded in `--json` output (`run.question_pack`) and in every cost-log line (9.3).
 3. **Unit tests cover structure only.** Tests check the pack's shape (four templates, the 11 categories, five Score levels, placeholders) and the exact request it produces for fixed items. They never assert what Jev answers.
 4. **The replay is the wording regression gate** (`gate`, 4.8). A new pack version is accepted only when the cached public-data replay (section 10), re-scored with it, drops AUROC by no more than 0.02 and still hides at most 5% of real issues at the replay's chosen threshold `t*`. Each gate run is logged with the pack version, the model snapshot and the results. This gate is separate from the pre-registered pass rule (10.8), which it does not change.
 5. **An on-demand smoke set** (`smoke`, 4.9). 20 unmistakable examples with loose bounds (a clear problem scores at least 0.7, clear noise below 0.3), run by hand with a real key after a Jev model update.
-6. **Nothing that calls Jev runs in automated pull-request checks.** Such runs need a key and cost money; they run on a pack change, a model snapshot change, or before a release. A test asserts the CI workflow runs only the offline checks and holds no provider key.
+6. **A second built-in pack for context.** `src/core/question-pack-context.json` (version `v0.1-context.1`) is used only by the context ablation (10.11). Its category, severity and duplicate questions are those of `v0.1`; its worth-acting-on question is reworded to judge the comment in the light of the pull request's purpose and the surrounding code, and its instructions point at each context block by a bare backticked path (`pr.description`, `pr.linked_issue`, `comments.{item}.file`, `comments.{item}.hunk_rest`). An instruction entry that is only a backticked path is left out of a request whose state lacks that path, so a question never points at a block its pull request or comment does not have; the built-in pack's paths are always present, so its requests are unchanged. A change to the context pack's wording is a new version of it.
+7. **Nothing that calls Jev runs in automated pull-request checks.** Such runs need a key and cost money; they run on a pack change, a model snapshot change, or before a release. A test asserts the CI workflow runs only the offline checks and holds no provider key.
 
 ### 5.5 Response handling
 
@@ -799,6 +842,9 @@ Quiet Review calls GitHub's REST and GraphQL APIs directly with Octokit (`@octok
 | Diff between the comment's commit and the final head (replay labels) | REST `GET /repos/{owner}/{repo}/compare/{from}...{to}` |
 | Replay candidate discovery | REST search `GET /search/issues` |
 | Repository visibility (private-repository policy, 8.3) | REST `GET /repos/{owner}/{repo}` (`private`, `visibility`) |
+| Context ablation: the PR's title renames, body revisions and linked issues (10.11) | GraphQL `pullRequest { title body userContentEdits timelineItems(RENAMED_TITLE_EVENT, CONNECTED_EVENT, DISCONNECTED_EVENT) }` |
+| Context ablation: a linked issue as it read then (10.11) | GraphQL `issueOrPullRequest { ... on Issue { title body createdAt userContentEdits timelineItems(RENAMED_TITLE_EVENT) } }` |
+| Context ablation: the commented file at the comment's commit, and the PR's diff at that commit (10.11) | REST `GET /repos/{owner}/{repo}/contents/{path}?ref={sha}`, `GET /repos/{owner}/{repo}/pulls/{n}` (base commit), `GET /repos/{owner}/{repo}/compare/{base}...{sha}` |
 
 **Read-only is enforced in code.**
 
@@ -1146,6 +1192,28 @@ The threshold `t*` is chosen on the same data it is scored on, so its `noise_col
 Assuming about 1,100 tokens per item (state plus four questions), 300 items come to about 330k input tokens, or about **$0.014** for the Jev `score` stage.
 The label check depends on the chosen model: 60 items at about 3k tokens each is roughly 180k input tokens. Through OpenRouter it dominates the replay's cost; through a subscription backend it costs nothing per call.
 
+### 10.11 Context ablation (richer context for Jev)
+
+Both public replays found Jev's `worth` barely above chance at separating comments developers acted on from ones they ignored. Jev sees only the comment and the last lines of its diff hunk (5.3), and judging a comment often needs more. The context ablation measures whether more context helps, on a replay that is already labelled, without touching its pre-registered result.
+
+**Blocks.** Three context blocks, each switched on per variant. Each holds only what existed **when the comment was written**: replies, resolution, later commits and the merge outcome are what the labels are derived from (10.5), so any of them in the context would leak the answer.
+
+| Block | State | What it holds |
+|---|---|---|
+| `pr_description` | `pr.title`, `pr.description` | The pull request's title and cleaned description (5.3 cleaning, without the 2,000-character cut) as they read at the time. The title is the previous title of the first rename after that time, else the current one. The description is the latest revision of the body's edit history at or before that time (GitHub keeps each revision's full text); a body never edited is the current one. |
+| `linked_issue` | `pr.linked_issue` (`title`, `body`) | The first issue the pull request referenced by then: a closing keyword (`close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, `resolved`, then `#N`, `owner/repo#N` or an issue URL) in the description as it read then, in text order, then issues linked in the sidebar before then and not unlinked by then. A reference to a pull request, to an issue created later, or to one that cannot be read is skipped. The issue's title and body are taken as they read then, as for the description. The description itself is not shown by this block. |
+| `wider_code` | `comments.cN.file`, `comments.cN.hunk_rest` | The commented file at the comment's commit (`original_commit_id`), as numbered lines (`41| code`) around the commented lines: the commented lines, then one line at a time on each side, up to 60 per side, while it fits its budget (a line is cut at 400 characters); and the rest of the comment's diff hunk after the commented line, taken from the pull request's diff at the comment's commit (`compare/{base}...{commit}`) by the hunk's header. A comment on the old side of the diff has no file window. |
+
+"Then" is the comment's creation time for `wider_code`, and for the pull-request blocks, which every comment of a pull request shares in one request, the earliest creation time among its drawn comments, so nothing later than any of them enters. When a block cannot be read that way (an edit history or timeline longer than the 100 entries read, a deleted revision, a file that cannot be read, a hunk not found), it is left out for that pull request or comment with a recorded reason, never filled from later data.
+
+**Budgets.** Each block is cut to a token budget, estimated as the request builder estimates (5.2, characters / 3.5): the description 1,500 tokens, the linked issue's title and body together 1,500, the file window 1,500 and the rest of the hunk 500 (whole lines). With every block at its limit, a single comment's request stays near 7,000 tokens, well inside Jev's 32k context; a pull request's comments are split by file into as few requests as fit the 26,000-token budget, each repeating the `pr` header (5.2).
+
+**Determinism.** Blocks come from GitHub answers cached in the replay directory, cleaning and cutting are pure functions, and the state and questions are built by the shared request builder, so the same data gives byte-identical requests and cache keys (R17). Block text is third-party data: it stays in the state and never enters `instructions` (5.3).
+
+**Question pack.** Every declared variant uses the context pack of 5.4.5, so a variant with no block measures the rewording alone.
+
+**Comparison.** Each variant is evaluated as 10.7 does, with the replay config's seed, 2,000 resamples and pass-rule limits: AUROC with its 95% range, the chosen threshold with `noise_collapsed` and `real_hidden`, keep precision, and AUROC per bot. The change in AUROC against the baseline is measured on the items both scored, with a paired percentile bootstrap: each resample draws the same items for both, so the range reflects the difference rather than each variant's own spread. The ablation applies no pass rule: it informs whether a reworked, context-carrying pack is worth a pre-registered replay of its own (10.8).
+
 ---
 
 ## 11. Implementation plan
@@ -1176,6 +1244,7 @@ src/commands/
   replay.ts                    stage runner (4.6)
   report.ts                    replay summary (4.7)
   gate.ts                      question-pack regression gate (4.8)
+  ablate.ts                    context ablation (4.10)
   smoke.ts                     on-demand smoke set (4.9)
   jev-run.ts                   cache, budget, cost log, key and redaction options for Jev judges
 src/inputs/
@@ -1186,6 +1255,7 @@ src/core/
   items.ts                     Item type, id assignment, stable ordering, body cleaning (5.3)
   state.ts                     state building, token estimate, file-grouped call packing (5.2, 5.3)
   question-pack.json           the versioned question pack (5.4.5) - the only place question wording lives
+  question-pack-context.json   the versioned context pack of the context ablation (5.4.5, 10.11)
   questions.ts                 loads and validates packs (built-in or a candidate file) and fills their templates
   cutoffs.ts                   cut-off resolution, provenance, stale and above-tested warnings (6.2)
   verdict.ts                   verdict, category, severity, duplicate rules (section 6); pure
@@ -1225,6 +1295,9 @@ src/replay/
   final-labels.ts              the final labels score and evaluate read: the label check's once its review is complete, else the automatic labels
   score.ts                     the score stage: drawn items to judge batches, scores.jsonl rows
   evaluate.ts                  metrics, breakdowns and pass rule on the replay's data (10.7, 10.8)
+  variants.ts                  the context ablation's variants file and block names (4.10)
+  context.ts                   the context blocks as they read at comment time, their budgets and coverage (10.11)
+  ablation.ts                  scoring each variant with its blocks, and the comparison against the baseline (10.11)
 src/calibration/               judge-agnostic calibration kit; imports nothing outside itself
   judge.ts                     Judge interface (any judge returning probabilities), judging labelled items
   metrics.ts                   AUROC (rank method), threshold sweep, chosen threshold, precision, calibration table
@@ -1233,6 +1306,7 @@ src/calibration/               judge-agnostic calibration kit; imports nothing o
   band.ts                      the abstain band and its calibrated edges
   drift.ts                     snapshot drift of a calibration
   gate.ts                      regression gate for a changed judge
+  compare.ts                   paired comparison of two judges' AUROC on the same items
   random.ts                    mulberry32 seeded generator
 src/smoke/
   smoke-set.json               the smoke set of 4.9
@@ -1280,6 +1354,7 @@ Octokit is constructed with the injected `fetch`, so one fake covers both GitHub
   - **`report`:** the summary with ranges, byte-identical re-runs, `--json` tables, the latest replay by default, refusal output, the inconclusive verdict with its trust reasons;
   - **`gate`:** accepted, rejected on AUROC drop, rejected on real hidden at `t*`, the gate log, the replay's result and cut-offs untouched, refusals, budget stop, snapshot warning;
   - **`smoke`:** pass, fail with the examples outside their bounds, budget stop, `--json`, and a check that CI holds no provider key and runs only offline checks.
+  - **`ablate`:** the baseline served from the replay's cache with its result and manifest untouched; each block as it read at comment time (a later description edit, title rename, issue edit, closing keyword or sidebar link left out), references dropped when a block is absent, a closing keyword naming a pull request or a missing issue skipped, the file window and its budget, the rest of the hunk, every block at its limit within the request budget, one budget across variants with stop and resume, written results and the runs log, per-bot AUROC, `--json`, byte-identical re-runs with no network read, block text kept out of instructions, and refusals (unlabelled replay, invalid or missing variants file, changed config).
 - **Pure unit tests:**
   - AUROC against hand-computed cases, including ties and the degenerate one-class case;
   - sweep and `t*` selection;
@@ -1372,5 +1447,5 @@ Items marked **proposed** in this spec, plus facts that need a live check. Each 
 | 10 | Duplicate question: is the relative Choice with a 0.60 floor enough, or should an absolute "is this a duplicate of any earlier comment" Noul be added (pointer + existence pattern, [jev-guide.md](jev-guide.md) 3.1, pattern 5)? | Choice only, since duplicates never drive the verdict | M4 |
 | 11 | Rework retest on a fresh sample when ≥150 unused items remain, otherwise on the same data. Acceptable? | As stated in 10.8 | Gate |
 | 12 | For v1: can a GitHub App installation minimize comments written by another app (GraphQL `minimizeComment`)? | Unverified; blocks the v1 App design, not v0 | M8 |
-| 13 | Should the PR body be added to the state? It might help or add context rot. | Excluded in v0; test after the replay | After gate |
+| 13 | Should the PR body be added to the state? It might help or add context rot. | Excluded in v0; measured, with a linked issue and wider code, by the context ablation (10.11) | After gate |
 | 14 | Cut-off write-back details: write only on a pass, set `keep_at` to `t*` only when `t*` is above 0.70, and replace hand-set values after printing them. | As stated in 6.2 | M4 |
