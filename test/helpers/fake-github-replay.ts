@@ -45,6 +45,9 @@ export interface FakePull {
   body_history?: { at: string; body: string }[]
   // Title renames in time order (GraphQL RenamedTitleEvent).
   renames?: { at: string; from: string; to: string }[]
+  // The timeline's totalCount as GitHub reports it: every timeline item, whatever itemTypes
+  // filters. Defaults to the filtered events plus the pull's comments and commits.
+  timeline_total?: number
   // Issues linked in the sidebar (ConnectedEvent) or unlinked (DisconnectedEvent).
   connected?: { at: string; issue: number; repository?: string; disconnected?: boolean }[]
   // The pull request's commits, in order (sha and subject).
@@ -71,6 +74,9 @@ export interface FakeIssue {
   created_at?: string
   body_history?: { at: string; body: string }[]
   renames?: { at: string; from: string; to: string }[]
+  // The timeline's totalCount as GitHub reports it: every timeline item, whatever itemTypes
+  // filters. Defaults to the filtered events (the issue's title renames).
+  timeline_total?: number
 }
 
 export interface FakeReplayWorld {
@@ -280,7 +286,15 @@ export function createFakeGitHubReplay(
             title: pull.title,
             body: currentBody(pull),
             userContentEdits: edits(pull.body_history),
-            timelineItems: { totalCount: timeline.length, nodes: timeline },
+            timelineItems: {
+              // As GitHub reports it, totalCount counts every timeline item, whatever
+              // itemTypes filters, while pageInfo and nodes respect the filter.
+              totalCount:
+                pull.timeline_total ??
+                timeline.length + pull.comments.length + (pull.commits?.length ?? 0),
+              pageInfo: { hasNextPage: false },
+              nodes: timeline,
+            },
           },
         },
       },
@@ -326,7 +340,11 @@ export function createFakeGitHubReplay(
             body: currentBody(issue),
             createdAt: issue.created_at ?? '2026-01-01T00:00:00Z',
             userContentEdits: edits(issue.body_history),
-            timelineItems: { totalCount: renames.length, nodes: renames },
+            timelineItems: {
+              totalCount: issue.timeline_total ?? renames.length,
+              pageInfo: { hasNextPage: false },
+              nodes: renames,
+            },
           },
         },
       },

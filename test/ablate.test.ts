@@ -236,6 +236,50 @@ describe('linked issue block', () => {
   })
 })
 
+describe('long timelines', () => {
+  // GitHub's timelineItems totalCount counts every timeline item, whatever itemTypes filters,
+  // so a busy pull request reports far more than the filtered events it returns. Reading that
+  // unfiltered count as the filtered one dropped the description and linked issue of every
+  // pull request on the live public-v2 replay as "timeline too long".
+  it('shows the description and linked issue although the unfiltered timeline count is large', async () => {
+    const setup = await evaluatedReplay(
+      contextReplay({
+        pull: (pr) => (pr === 1 ? { body: 'Retry sends.\n\nFixes #70', timeline_total: 400 } : {}),
+        issues: [
+          {
+            number: 70,
+            title: 'Widget sends give up too early',
+            body: 'Sends fail on the first timeout.',
+            created_at: '2026-06-01T00:00:00Z',
+            timeline_total: 400,
+          },
+        ],
+      }),
+    )
+    writeVariants(setup.sandbox, {
+      variants: [{ name: 'rich', blocks: ['pr_description', 'linked_issue'] }],
+    })
+    const jev = jevByPart(WORTH)
+
+    const run = await ablate(['public-v1'], setup.sandbox, jev, setup.gitHub)
+
+    expect(run.exitCode).toBe(0)
+    // PR 1 reports 400 timeline items against two filtered, and its issue 400 against none;
+    // every other pull request's count also exceeds its filtered events by its comments and
+    // commits, yet the blocks that exist are all shown.
+    const request = requestFor(jev, 1)
+    expect(request.state.pr.description).toBe('Retry sends.\n\nFixes #70')
+    expect(request.state.pr.linked_issue).toEqual({
+      title: 'Widget sends give up too early',
+      body: 'Sends fail on the first timeout.',
+    })
+    expect(requestFor(jev, 2).state.pr.description).toBe('Makes widget handling more robust.')
+    expect(run.stdout).toContain('  pr_description,10 of 10 pull requests,')
+    expect(run.stdout).toContain('  linked_issue,1 of 10 pull requests,')
+    expect(run.stdout).not.toContain('timeline too long')
+  })
+})
+
 describe('wider code block', () => {
   // PR N's comment is on line 10 of src/coderabbitaibot-N-0.ts at commit f-acme-widgets-N;
   // the replay world serves that file (100 lines, "line K") for odd PRs only.
