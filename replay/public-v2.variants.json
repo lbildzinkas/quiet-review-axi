@@ -1,0 +1,8 @@
+{
+  "variants": [
+    { "name": "pr", "blocks": ["pr_description"] },
+    { "name": "issue", "blocks": ["linked_issue"] },
+    { "name": "code", "blocks": ["wider_code"] },
+    { "name": "all", "blocks": ["pr_description", "linked_issue", "wider_code"] }
+  ]
+}
