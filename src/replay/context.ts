@@ -157,7 +157,7 @@ const PULL_CONTEXT_QUERY = `query($owner: String!, $repo: String!, $number: Int!
         first: 100
         itemTypes: [RENAMED_TITLE_EVENT, CONNECTED_EVENT, DISCONNECTED_EVENT]
       ) {
-        totalCount
+        pageInfo { hasNextPage }
         nodes {
           __typename
           ... on RenamedTitleEvent { createdAt previousTitle currentTitle }
@@ -183,7 +183,7 @@ const ISSUE_CONTEXT_QUERY = `query($owner: String!, $repo: String!, $number: Int
         createdAt
         userContentEdits(first: 100) { totalCount nodes { editedAt diff } }
         timelineItems(first: 100, itemTypes: [RENAMED_TITLE_EVENT]) {
-          totalCount
+          pageInfo { hasNextPage }
           nodes {
             __typename
             ... on RenamedTitleEvent { createdAt previousTitle currentTitle }
@@ -214,7 +214,7 @@ interface IssueContextPage {
       body?: string | null
       createdAt?: string
       userContentEdits?: Edits
-      timelineItems?: { totalCount: number; nodes: TimelineNode[] }
+      timelineItems?: { pageInfo: { hasNextPage: boolean }; nodes: TimelineNode[] }
     } | null
   } | null
 }
@@ -230,7 +230,7 @@ interface PullContextPage {
       title: string
       body: string | null
       userContentEdits: Edits
-      timelineItems: { totalCount: number; nodes: TimelineNode[] }
+      timelineItems: { pageInfo: { hasNextPage: boolean }; nodes: TimelineNode[] }
     } | null
   } | null
 }
@@ -250,7 +250,9 @@ async function pullContextAt(
   const pull = page?.repository?.pullRequest
   if (!pull) return unavailable('pull request unavailable')
   const { timelineItems } = pull
-  if (timelineItems.totalCount > timelineItems.nodes.length) return unavailable('timeline too long')
+  // GitHub's totalCount counts every timeline item, whatever itemTypes filters, so it says
+  // nothing about the filtered events read here; the filtered connection's own page does.
+  if (timelineItems.pageInfo.hasNextPage) return unavailable('timeline too long')
   const title = titleAt(pull.title, timelineItems.nodes, at)
   const body = textAt(pull.body, pull.userContentEdits, at)
   if ('reason' in body) return { ...unavailable(body.reason), title }
@@ -374,8 +376,8 @@ async function issueAt(
   )
     return null
   if (issue.createdAt === undefined || isAfter(issue.createdAt, at)) return null
-  const timeline = issue.timelineItems ?? { totalCount: 0, nodes: [] }
-  if (timeline.totalCount > timeline.nodes.length) return null
+  const timeline = issue.timelineItems ?? { pageInfo: { hasNextPage: false }, nodes: [] }
+  if (timeline.pageInfo.hasNextPage) return null
   const body = textAt(issue.body ?? null, issue.userContentEdits, at)
   if ('reason' in body) return null
   const title = titleAt(issue.title, timeline.nodes, at)
